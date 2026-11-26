@@ -149,7 +149,7 @@ bool createDefaultSdLayout() {
         "  Voice Recorder output files saved as 16kHz 16-bit mono PCM WAV:\n"
         "  `/recordings/yyyyMMdd_HHmmss.wav`.\n"
         "- `/music/`\n"
-        "  Music Player library folder. Put `.mp3` or `.wav` audio files here.\n"
+        "  Audio Playback library folder. Put `.mp3` or `.wav` audio files here.\n"
         "  (Keep separate from `/recordings/` so voice memos and music stay organized.)\n";
 
     SPI.begin(cfg::SD_SCK, cfg::SD_MISO, cfg::SD_MOSI, cfg::SD_CS);

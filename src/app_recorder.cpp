@@ -3,6 +3,7 @@
 #include <M5Cardputer.h>
 #include <SD.h>
 #include <SPI.h>
+#include <driver/gpio.h>
 
 #include <algorithm>
 #include <atomic>
@@ -133,14 +134,75 @@ void drawRecScreen(const std::string& filename, uint32_t elapsed_ms, int peak_lv
     cv.pushSprite(0, 0);
 }
 
+// ES8311 codec on the Cardputer-Adv internal I2C bus.
+constexpr uint8_t kEs8311Addr = 0x18;
+constexpr uint32_t kEs8311I2cFreq = 100000;
+constexpr int kWarmupChunks = 28;          // ~900 ms of discarded audio
+constexpr uint32_t kRecUiIntervalMs = 120;  // VU/timer redraw throttle
+
+bool es8311Write(uint8_t reg, uint8_t val) {
+    return M5Cardputer.In_I2C.writeRegister8(kEs8311Addr, reg, val, kEs8311I2cFreq);
+}
+
+bool isStopKey(const KeyInput& k) {
+    char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
+    return k.enter || k.esc || k.btn_g0 || k.ch == ' ' || lc == 'q';
+}
+
+int chunkPeakPct(const int16_t* buf, size_t n) {
+    int32_t max_amp = 0;
+    for (size_t i = 0; i < n; ++i) {
+        int32_t v = buf[i];
+        if (v < 0) v = -v;
+        if (v > max_amp) max_amp = v;
+    }
+    return std::min(100, static_cast<int>((max_amp * 100) / 16384));
+}
+
 void recordNewWav() {
     ensureRecordingsDir();
 
+    static int16_t rec_buf[2][kRecChunkSamples];
+
+    // Shut the speaker down cleanly: it shares the ES8311 / I2S bus with the mic.
+    M5Cardputer.Speaker.setVolume(0);
     M5Cardputer.Speaker.stop();
     M5Cardputer.Speaker.end();
+    delay(20);
+
+    // M5Unified drives GPIO46 (ES8311 ADC data -> ESP32) as output-HIGH during
+    // board detection and never restores it on Cardputer-Adv; the IDF 5.5 I2S
+    // driver does not disable the output driver, so RX would read all-ones.
+    // Reset the I2S data/clock pins so the I2S driver gets clean pins.
+    gpio_reset_pin(GPIO_NUM_46);
+    gpio_reset_pin(GPIO_NUM_41);
+    gpio_reset_pin(GPIO_NUM_43);
+
+    auto mcfg = M5Cardputer.Mic.config();
+    mcfg.sample_rate = kRecSampleRate;
+    mcfg.magnification = 4;  // codec provides analog/digital gain; keep software gain low
+    M5Cardputer.Mic.config(mcfg);
+
     if (!M5Cardputer.Mic.begin()) {
         ui::showToast("Mic Error", "Failed to start ES8311 mic", "", cfg::COL_RED);
         return;
+    }
+
+    // ES8311 only arms its capture path when SYSTEM reg 0x0D=0x01 is written
+    // while the I2S clock is running. Start a dummy capture so the clock runs,
+    // then re-write 0x0D a few times (Cardputer-Adv has no post-start callback).
+    M5Cardputer.Mic.record(rec_buf[0], kRecChunkSamples, kRecSampleRate);
+    for (int i = 0; i < 3; ++i) {
+        delay(30);
+        es8311Write(0x0D, 0x01);  // SYSTEM: power up analog circuitry
+    }
+    // M5Unified's defaults are 0 dB PGA / 0 dB ADC, far too quiet for speech.
+    es8311Write(0x0E, 0x02);  // SYSTEM: enable analog PGA and ADC modulator
+    es8311Write(0x14, 0x17);  // ADC_REG14: Mic1p/Mic1n, PGA +21 dB
+    es8311Write(0x17, 0xCB);  // ADC_REG17: ADC volume +6 dB
+    es8311Write(0x1C, 0x6A);  // ADC_REG1C: EQ bypass, digital DC offset cancel
+    while (M5Cardputer.Mic.isRecording()) {
+        delay(2);
     }
 
     time_t now = time(nullptr);
@@ -155,6 +217,8 @@ void recordNewWav() {
     File file = SD.open(path.c_str(), FILE_WRITE);
     if (!file) {
         M5Cardputer.Mic.end();
+        gpio_reset_pin(GPIO_NUM_41);
+        gpio_reset_pin(GPIO_NUM_43);
         ui::showToast("SD Error", "Cannot open file:", filename, cfg::COL_RED);
         return;
     }
@@ -162,84 +226,107 @@ void recordNewWav() {
     audio_utils::WavHeader hdr = audio_utils::makePcmWavHeader(kRecSampleRate, 1, 16, 0);
     file.write(reinterpret_cast<const uint8_t*>(&hdr), sizeof(hdr));
 
-    static int16_t rec_buf[2][kRecChunkSamples];
-
     ui::waitKeyRelease();
 
-    // ES8311 warms up for ~400-500ms on power-up; discard initial zeroed/pop frames
+    // ES8311 analog section needs ~1 s after power-up; discard initial frames.
     drawRecScreen(filename, 0, 0, 0, true);
-    for (int w = 0; w < 14; ++w) {
+    for (int w = 0; w < kWarmupChunks; ++w) {
         M5Cardputer.Mic.record(rec_buf[0], kRecChunkSamples, kRecSampleRate);
+        bool cancel = false;
         while (M5Cardputer.Mic.isRecording()) {
-            delay(4);
+            if (isStopKey(ui::pollInput(400))) cancel = true;
+            delay(2);
         }
-        KeyInput wk = ui::pollInput(400);
-        if (wk.esc || wk.btn_g0 || wk.enter || wk.ch == ' ' ||
-            (wk.ch && std::tolower(static_cast<unsigned char>(wk.ch)) == 'q')) {
+        if (cancel || isStopKey(ui::pollInput(400))) {
             file.close();
             SD.remove(path.c_str());
             M5Cardputer.Mic.end();
+            gpio_reset_pin(GPIO_NUM_41);
+            gpio_reset_pin(GPIO_NUM_43);
             ui::waitKeyRelease();
             return;
         }
     }
 
+    // Double-buffered capture. Mic_Class completes queued requests in FIFO
+    // order, so rec_buf[idx] is always the oldest in-flight buffer. 'inflight'
+    // counts buffers queued but not yet written (oldest = idx, next = idx^1).
     uint32_t data_bytes = 0;
     uint32_t t_start = millis();
-    int cur = 0;
-    bool prev_valid = false;
-    bool aborted = false;
+    uint32_t last_ui = 0;
+    int peak_pct = 0;
+    int idx = 0;
+    int inflight = 0;
+    bool stop = false;
+    bool write_failed = false;
 
-    M5Cardputer.Mic.record(rec_buf[cur], kRecChunkSamples, kRecSampleRate);
+    if (M5Cardputer.Mic.record(rec_buf[0], kRecChunkSamples, kRecSampleRate)) {
+        ++inflight;
+        if (M5Cardputer.Mic.record(rec_buf[1], kRecChunkSamples, kRecSampleRate)) ++inflight;
+    }
+    if (inflight < 2) stop = true;  // could not queue; drain whatever started
 
-    while (!aborted) {
-        int prev = 1 - cur;
-        int peak_pct = 0;
-        if (prev_valid) {
-            int32_t max_amp = 0;
-            for (size_t i = 0; i < kRecChunkSamples; ++i) {
-                int32_t v = rec_buf[prev][i];
-                if (v < 0) v = -v;
-                if (v > max_amp) max_amp = v;
-            }
-            peak_pct = std::min(100, static_cast<int>((max_amp * 100) / 16384));
-            size_t wr = file.write(reinterpret_cast<const uint8_t*>(rec_buf[prev]),
-                                   kRecChunkSamples * sizeof(int16_t));
-            if (wr == 0) {
-                aborted = true;
+    drawRecScreen(filename, 0, 0, 0, false);
+    last_ui = millis();
+
+    while (!stop) {
+        // Wait until the oldest buffer completes (busy slot count drops below
+        // the number of buffers we have in flight). Keep polling keys.
+        while (static_cast<int>(M5Cardputer.Mic.isRecording()) >= inflight) {
+            if (isStopKey(ui::pollInput(400))) {
+                stop = true;
                 break;
             }
-            data_bytes += static_cast<uint32_t>(wr);
+            delay(2);
         }
+        if (stop) break;
 
-        drawRecScreen(filename, millis() - t_start, peak_pct, data_bytes, false);
-
-        while (M5Cardputer.Mic.isRecording()) {
-            KeyInput k = ui::pollInput(400);
-            char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
-            if (k.enter || k.esc || k.btn_g0 || k.ch == ' ' || lc == 'q') {
-                aborted = true;
-            }
-            delay(4);
-        }
-
-        prev_valid = true;
-        if (aborted) {
-            // Write the completed 'cur' buffer before stopping
-            size_t wr = file.write(reinterpret_cast<const uint8_t*>(rec_buf[cur]),
-                                   kRecChunkSamples * sizeof(int16_t));
-            data_bytes += static_cast<uint32_t>(wr);
+        // rec_buf[idx] is complete.
+        peak_pct = chunkPeakPct(rec_buf[idx], kRecChunkSamples);
+        size_t wr = file.write(reinterpret_cast<const uint8_t*>(rec_buf[idx]),
+                               kRecChunkSamples * sizeof(int16_t));
+        --inflight;
+        if (wr == 0) {
+            write_failed = true;
+            stop = true;
             break;
         }
+        data_bytes += static_cast<uint32_t>(wr);
 
-        cur = 1 - cur;
-        M5Cardputer.Mic.record(rec_buf[cur], kRecChunkSamples, kRecSampleRate);
+        // Re-queue the just-written buffer behind the other in-flight one.
+        if (M5Cardputer.Mic.record(rec_buf[idx], kRecChunkSamples, kRecSampleRate)) {
+            ++inflight;
+        } else {
+            stop = true;
+        }
+        idx ^= 1;
+
+        uint32_t now_ms = millis();
+        if (now_ms - last_ui >= kRecUiIntervalMs) {
+            last_ui = now_ms;
+            drawRecScreen(filename, now_ms - t_start, peak_pct, data_bytes, false);
+        }
     }
 
+    // Drain: let every queued request finish, then flush the remaining
+    // completed buffers in FIFO order (oldest first).
     while (M5Cardputer.Mic.isRecording()) {
-        delay(4);
+        delay(2);
     }
+    for (; inflight > 0 && !write_failed; --inflight) {
+        size_t wr = file.write(reinterpret_cast<const uint8_t*>(rec_buf[idx]),
+                               kRecChunkSamples * sizeof(int16_t));
+        if (wr == 0) {
+            write_failed = true;
+            break;
+        }
+        data_bytes += static_cast<uint32_t>(wr);
+        idx ^= 1;
+    }
+
     M5Cardputer.Mic.end();
+    gpio_reset_pin(GPIO_NUM_41);
+    gpio_reset_pin(GPIO_NUM_43);
 
     hdr = audio_utils::makePcmWavHeader(kRecSampleRate, 1, 16, data_bytes);
     file.seek(0);
@@ -276,7 +363,7 @@ void playRecordingWav(const RecEntry& rec) {
     }
 
     char riff_hdr[12];
-    if (f.read(reinterpret_cast<uint8_t*>(riff_hdr), 12) != 12 ||
+    if (f.read(reinterpret_cast<uint8_t*>(riff_hdr), sizeof(riff_hdr)) != sizeof(riff_hdr) ||
         std::memcmp(riff_hdr, "RIFF", 4) != 0 ||
         std::memcmp(riff_hdr + 8, "WAVE", 4) != 0) {
         f.close();
@@ -316,6 +403,9 @@ void playRecordingWav(const RecEntry& rec) {
     M5Cardputer.Mic.end();
     M5Cardputer.Speaker.stop();
     M5Cardputer.Speaker.end();
+    // Return the shared I2S clock pins to a clean state before the speaker re-inits them.
+    gpio_reset_pin(GPIO_NUM_41);
+    gpio_reset_pin(GPIO_NUM_43);
 
     for (size_t i = 0; i < kPlayBufCount; ++i) {
         g_play_busy[i].store(false, std::memory_order_relaxed);

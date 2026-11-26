@@ -23,8 +23,9 @@ The launcher uses a two-column grid (`1-7` hotkeys or `; . , /` navigation + `En
    - Detects microSD card type and capacity, formats to **FAT32** after two-step `Y` -> `Enter` confirmation, and optionally initializes `/ssh`, `/ssh/keys`, `/ssh/logs`, `/recordings`, `/music`, and `/README.md` (`[X] Init folders & README.md`).
 5. **Voice Rec**
    - Records 16 kHz 16-bit PCM WAV audio via the ES8311 microphone with a live level meter to `/recordings/yyyyMMdd_HHmmss.wav`, with built-in playback and deletion.
-6. **Music**
-   - Standalone `.mp3` / `.wav` player reading from `/music/` (kept separate from `/recordings/`), supporting ID3 title/artist display, pause/resume, previous/next track, volume adjustment, and repeat mode (`ALL` / `ONE` / `OFF`).
+6. **Audio Playback**
+   - Built-in **1 kHz Test Tone**: a pure 1000 Hz sine wave that works without an SD card, useful for speaker / audio-path debugging.
+   - `.mp3` (decoded with `dr_mp3`) / `.wav` playback from `/music/` (kept separate from `/recordings/`), supporting ID3 title/artist display, pause/resume, previous/next track, volume adjustment, and repeat mode (`ALL` / `ONE` / `OFF`).
 7. **Games**
    - Includes **1. Snake** and **2. Sudoku**.
 
@@ -72,4 +73,4 @@ This project originated from [`moremas/build-with-claude`](https://github.com/mo
 
 This repository's own source code is licensed under the **Apache License, Version 2.0** — see [`LICENSE`](LICENSE).
 
-Third-party libraries fetched during compilation (`M5Cardputer`, `M5Unified`, `M5GFX`, `LibSSH-ESP32`, `ESP8266Audio`, etc.) remain under their respective licenses; see [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md) for details (note that `ESP8266Audio` is **GPL-3.0-or-later** and `LibSSH-ESP32` is **LGPL-2.1-or-later**).
+No GPL-licensed code is linked into the firmware. Third-party components remain under their respective licenses: **MIT** (`M5Cardputer`, `M5Unified`, `M5GFX`, etc.), **Public Domain / MIT-0** (`dr_mp3`, vendored in `src/third_party/`), and **LGPL-2.1-or-later** (`LibSSH-ESP32`, arduino-esp32 core). See [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md) for details.

@@ -2,6 +2,7 @@
 
 #include <M5Cardputer.h>
 #include <WiFi.h>
+#include <driver/gpio.h>
 
 #include <algorithm>
 #include <cctype>
@@ -1123,6 +1124,10 @@ void runSshClientApp() {
 void UiShell::begin() {
     auto m5cfg = M5.config();
     M5Cardputer.begin(m5cfg, true);
+    // M5Unified drives GPIO46 output-HIGH during board detection and does not restore it
+    // on Cardputer-Adv. GPIO46 is the ES8311 ADC data line (ASDOUT); leaving it driven
+    // makes the microphone record silence, so release it back to its reset state.
+    gpio_reset_pin(GPIO_NUM_46);
     // M5GFX >= 0.3.0 already sets rotation_offset=1 for Cardputer-Adv (rotation 0 is 240x135).
     // Only apply setRotation(1) if the panel initialized in portrait orientation.
     if (M5Cardputer.Display.width() < M5Cardputer.Display.height()) {
@@ -1147,7 +1152,7 @@ void UiShell::tick() {
         "3.Date & Time",
         "4.SD Format",
         "5.Voice Rec",
-        "6.Music",
+        "6.Audio Playback",
         "7.Games >",
     };
 
