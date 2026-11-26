@@ -13,6 +13,8 @@
 #include <string>
 #include <vector>
 
+#include "app_alarm.h"
+#include "audio_hw.h"
 #include "audio_utils.h"
 #include "config.h"
 #include "time_sync.h"
@@ -130,23 +132,15 @@ void drawRecScreen(const std::string& filename, uint32_t elapsed_ms, int peak_lv
         cv.fillRect(12, 74, bar_w, 10, bcol);
     }
 
-    ui::drawHints("Enter / Space stop", "Q / G0 stop");
+    ui::drawHints("Enter / Space stop", "ESC / G0 stop");
     cv.pushSprite(0, 0);
 }
 
-// ES8311 codec on the Cardputer-Adv internal I2C bus.
-constexpr uint8_t kEs8311Addr = 0x18;
-constexpr uint32_t kEs8311I2cFreq = 100000;
 constexpr int kWarmupChunks = 28;          // ~900 ms of discarded audio
 constexpr uint32_t kRecUiIntervalMs = 120;  // VU/timer redraw throttle
 
-bool es8311Write(uint8_t reg, uint8_t val) {
-    return M5Cardputer.In_I2C.writeRegister8(kEs8311Addr, reg, val, kEs8311I2cFreq);
-}
-
 bool isStopKey(const KeyInput& k) {
-    char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
-    return k.enter || k.esc || k.btn_g0 || k.ch == ' ' || lc == 'q';
+    return k.enter || k.esc || k.btn_g0 || k.ch == ' ';
 }
 
 int chunkPeakPct(const int16_t* buf, size_t n) {
@@ -160,49 +154,15 @@ int chunkPeakPct(const int16_t* buf, size_t n) {
 }
 
 void recordNewWav() {
+    app_alarm::SuppressGuard alarm_guard;
     ensureRecordingsDir();
 
     static int16_t rec_buf[2][kRecChunkSamples];
 
-    // Shut the speaker down cleanly: it shares the ES8311 / I2S bus with the mic.
-    M5Cardputer.Speaker.setVolume(0);
-    M5Cardputer.Speaker.stop();
-    M5Cardputer.Speaker.end();
-    delay(20);
-
-    // M5Unified drives GPIO46 (ES8311 ADC data -> ESP32) as output-HIGH during
-    // board detection and never restores it on Cardputer-Adv; the IDF 5.5 I2S
-    // driver does not disable the output driver, so RX would read all-ones.
-    // Reset the I2S data/clock pins so the I2S driver gets clean pins.
-    gpio_reset_pin(GPIO_NUM_46);
-    gpio_reset_pin(GPIO_NUM_41);
-    gpio_reset_pin(GPIO_NUM_43);
-
-    auto mcfg = M5Cardputer.Mic.config();
-    mcfg.sample_rate = kRecSampleRate;
-    mcfg.magnification = 4;  // codec provides analog/digital gain; keep software gain low
-    M5Cardputer.Mic.config(mcfg);
-
-    if (!M5Cardputer.Mic.begin()) {
+    if (!audio_hw::prepareMic(0x17, 0xCB)) {
+        audio_hw::restoreQuietSpeakerIdle();
         ui::showToast("Mic Error", "Failed to start ES8311 mic", "", cfg::COL_RED);
         return;
-    }
-
-    // ES8311 only arms its capture path when SYSTEM reg 0x0D=0x01 is written
-    // while the I2S clock is running. Start a dummy capture so the clock runs,
-    // then re-write 0x0D a few times (Cardputer-Adv has no post-start callback).
-    M5Cardputer.Mic.record(rec_buf[0], kRecChunkSamples, kRecSampleRate);
-    for (int i = 0; i < 3; ++i) {
-        delay(30);
-        es8311Write(0x0D, 0x01);  // SYSTEM: power up analog circuitry
-    }
-    // M5Unified's defaults are 0 dB PGA / 0 dB ADC, far too quiet for speech.
-    es8311Write(0x0E, 0x02);  // SYSTEM: enable analog PGA and ADC modulator
-    es8311Write(0x14, 0x17);  // ADC_REG14: Mic1p/Mic1n, PGA +21 dB
-    es8311Write(0x17, 0xCB);  // ADC_REG17: ADC volume +6 dB
-    es8311Write(0x1C, 0x6A);  // ADC_REG1C: EQ bypass, digital DC offset cancel
-    while (M5Cardputer.Mic.isRecording()) {
-        delay(2);
     }
 
     time_t now = time(nullptr);
@@ -216,9 +176,7 @@ void recordNewWav() {
 
     File file = SD.open(path.c_str(), FILE_WRITE);
     if (!file) {
-        M5Cardputer.Mic.end();
-        gpio_reset_pin(GPIO_NUM_41);
-        gpio_reset_pin(GPIO_NUM_43);
+        audio_hw::restoreQuietSpeakerIdle();
         ui::showToast("SD Error", "Cannot open file:", filename, cfg::COL_RED);
         return;
     }
@@ -240,9 +198,7 @@ void recordNewWav() {
         if (cancel || isStopKey(ui::pollInput(400))) {
             file.close();
             SD.remove(path.c_str());
-            M5Cardputer.Mic.end();
-            gpio_reset_pin(GPIO_NUM_41);
-            gpio_reset_pin(GPIO_NUM_43);
+            audio_hw::restoreQuietSpeakerIdle();
             ui::waitKeyRelease();
             return;
         }
@@ -324,9 +280,7 @@ void recordNewWav() {
         idx ^= 1;
     }
 
-    M5Cardputer.Mic.end();
-    gpio_reset_pin(GPIO_NUM_41);
-    gpio_reset_pin(GPIO_NUM_43);
+    audio_hw::restoreQuietSpeakerIdle();
 
     hdr = audio_utils::makePcmWavHeader(kRecSampleRate, 1, 16, data_bytes);
     file.seek(0);
@@ -400,26 +354,20 @@ void playRecordingWav(const RecEntry& rec) {
         return;
     }
 
-    M5Cardputer.Mic.end();
-    M5Cardputer.Speaker.stop();
-    M5Cardputer.Speaker.end();
-    // Return the shared I2S clock pins to a clean state before the speaker re-inits them.
-    gpio_reset_pin(GPIO_NUM_41);
-    gpio_reset_pin(GPIO_NUM_43);
+    app_alarm::SuppressGuard alarm_guard;
 
     for (size_t i = 0; i < kPlayBufCount; ++i) {
         g_play_busy[i].store(false, std::memory_order_relaxed);
     }
     M5Cardputer.Speaker.setBufferReleaseCallback(nullptr, wavPlayReleased);
 
-    uint8_t vol = 180;
-    if (!M5Cardputer.Speaker.begin()) {
+    int vol_pct = 70;
+    if (!audio_hw::prepareSpeaker(vol_pct)) {
         M5Cardputer.Speaker.setBufferReleaseCallback(nullptr, nullptr);
         f.close();
         ui::showToast("Speaker Error", "Failed to start ES8311", "", cfg::COL_RED);
         return;
     }
-    M5Cardputer.Speaker.setVolume(vol);
 
     uint32_t byte_rate = fmt.sample_rate * fmt.channels * (fmt.bits_per_sample / 8);
     uint32_t total_sec = byte_rate ? (data_size / byte_rate) : 0;
@@ -445,7 +393,6 @@ void playRecordingWav(const RecEntry& rec) {
         cv.setTextColor(paused ? cfg::COL_YELLOW : cfg::COL_GREEN, cfg::COL_BG);
         cv.drawString(paused ? "[ PAUSED ]" : "[ PLAYING ]", 10, 26);
 
-        int vol_pct = (static_cast<int>(vol) * 100) / 255;
         cv.setTextDatum(top_right);
         cv.setTextColor(cfg::COL_CREAM, cfg::COL_BG);
         cv.drawString(("Vol:" + std::to_string(vol_pct) + "%").c_str(), 230, 26);
@@ -462,17 +409,16 @@ void playRecordingWav(const RecEntry& rec) {
         cv.setTextColor(cfg::COL_GRAY, cfg::COL_BG);
         cv.drawString((audio_utils::formatMmSs(cur_sec) + " / " + audio_utils::formatMmSs(total_sec)).c_str(), 10, 82);
 
-        ui::drawHints("Space pause  ;. vol", "Enter / Q stop");
+        ui::drawHints("Space pause  ;. vol", "Enter / ESC stop");
         cv.pushSprite(0, 0);
     };
 
     drawPlayUi(true);
 
     while (remaining > 0 && !stopped) {
-        KeyInput k = ui::pollInput(120);
+        KeyInput k = ui::pollInput(65);
         ui::applyMenuNav(k);
-        char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
-        if (k.esc || k.btn_g0 || k.enter || lc == 'q') {
+        if (k.esc || k.btn_g0 || k.enter) {
             stopped = true;
             break;
         }
@@ -480,12 +426,12 @@ void playRecordingWav(const RecEntry& rec) {
             paused = !paused;
             drawPlayUi(true);
         } else if (k.up || k.ch == '+' || k.ch == '=') {
-            vol = static_cast<uint8_t>(std::min(255, static_cast<int>(vol) + 16));
-            M5Cardputer.Speaker.setVolume(vol);
+            vol_pct = audio_utils::stepVolumePct(vol_pct, +1, k.repeat_count);
+            M5Cardputer.Speaker.setVolume(audio_utils::volumePctToHardware(vol_pct));
             drawPlayUi(true);
         } else if (k.down || k.ch == '-') {
-            vol = static_cast<uint8_t>(std::max(0, static_cast<int>(vol) - 16));
-            M5Cardputer.Speaker.setVolume(vol);
+            vol_pct = audio_utils::stepVolumePct(vol_pct, -1, k.repeat_count);
+            M5Cardputer.Speaker.setVolume(audio_utils::volumePctToHardware(vol_pct));
             drawPlayUi(true);
         }
 
@@ -527,15 +473,13 @@ void playRecordingWav(const RecEntry& rec) {
                 g_play_busy[1].load(std::memory_order_acquire)) &&
                (millis() - drain_t0 < 2000)) {
             KeyInput k = ui::pollInput();
-            char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
-            if (k.esc || k.btn_g0 || k.enter || lc == 'q') break;
+            if (k.esc || k.btn_g0 || k.enter) break;
             delay(10);
         }
     }
 
-    M5Cardputer.Speaker.stop();
-    M5Cardputer.Speaker.end();
     M5Cardputer.Speaker.setBufferReleaseCallback(nullptr, nullptr);
+    audio_hw::restoreQuietSpeakerIdle();
     f.close();
     ui::waitKeyRelease();
 }
@@ -585,14 +529,14 @@ void runRecorderApp() {
             }
         }
 
-        ui::drawHints(cursor == 0 ? "Enter start rec" : "Enter play  D del", "Q / G0 back");
+        ui::drawHints(cursor == 0 ? "Enter start rec" : "Enter play  D del", "ESC / G0 back");
         cv.pushSprite(0, 0);
 
         KeyInput k = ui::pollInput();
         ui::applyMenuNav(k);
         char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
 
-        if (k.esc || k.btn_g0 || lc == 'q') {
+        if (k.esc || k.btn_g0) {
             ui::waitKeyRelease();
             return;
         }

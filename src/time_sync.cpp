@@ -165,12 +165,11 @@ bool syncWithUi(uint32_t timeout_ms, std::string* out_msg) {
         cv.setTextColor(cfg::COL_GRAY, cfg::COL_BG);
         cv.drawString(ui::fitCols("Server: " + g_ntp_server_buf, 36).c_str(), 12, 56);
         cv.drawString(("TZ: " + formatTzLabel(s.tz_offset_hours)).c_str(), 12, 74);
-        ui::drawHints("Waiting NTP...", "Q / G0 cancel");
+        ui::drawHints("Waiting NTP...", "ESC / G0 cancel");
         cv.pushSprite(0, 0);
 
         KeyInput k = ui::pollInput();
-        char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
-        if (k.esc || k.btn_g0 || lc == 'q') {
+        if (k.esc || k.btn_g0) {
             if (out_msg) *out_msg = "Cancelled";
             ui::waitKeyRelease();
             return false;
@@ -227,6 +226,24 @@ std::string formatDateYmd() {
     localtime_r(&now, &tm_info);
     char buf[16];
     strftime(buf, sizeof(buf), "%Y-%m-%d", &tm_info);
+    return buf;
+}
+
+std::string formatHeaderDate(int max_chars) {
+    if (!isTimeSynced() || max_chars < 5) {
+        return "";
+    }
+    time_t now = time(nullptr);
+    struct tm tm_info{};
+    localtime_r(&now, &tm_info);
+    char buf[16];
+    if (max_chars >= 10) {
+        strftime(buf, sizeof(buf), "%Y-%m-%d", &tm_info);
+    } else if (max_chars >= 8) {
+        strftime(buf, sizeof(buf), "%y-%m-%d", &tm_info);
+    } else {
+        strftime(buf, sizeof(buf), "%m-%d", &tm_info);
+    }
     return buf;
 }
 

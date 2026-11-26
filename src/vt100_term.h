@@ -7,14 +7,26 @@ class VT100Term {
 public:
     static constexpr int kDefaultFg = 7; // Light gray / cream
     static constexpr int kDefaultBg = 0; // Black
+    static constexpr int kMaxScrollback = 120;
 
     struct Cell {
         char ch = ' ';
         uint8_t fg = kDefaultFg;
         uint8_t bg = kDefaultBg;
-        bool bold = false;
-        bool inverse = false;
+        uint8_t attr = 0;  // bit 0 = bold, bit 1 = inverse
+
+        bool bold() const { return (attr & 1U) != 0; }
+        bool inverse() const { return (attr & 2U) != 0; }
+        void setBold(bool v) {
+            if (v) attr |= 1U;
+            else attr &= ~1U;
+        }
+        void setInverse(bool v) {
+            if (v) attr |= 2U;
+            else attr &= ~2U;
+        }
     };
+    static_assert(sizeof(Cell) == 4, "Cell must stay 4 bytes");
 
     VT100Term(int cols = 40, int rows = 15);
 
@@ -28,6 +40,14 @@ public:
     bool cursorVisible() const { return cursor_visible_; }
 
     const Cell& cell(int r, int c) const { return cells_[r * cols_ + c]; }
+    const Cell& viewCell(int r, int c) const;
+
+    void scrollViewUp(int lines);
+    void scrollViewDown(int lines);
+    void resetScrollView();
+    int viewOffset() const { return view_offset_; }
+    int scrollbackCount() const { return sb_count_; }
+
     bool isRowDirty(int r) const { return r >= 0 && r < rows_ && ((dirty_mask_ >> r) & 1U) != 0; }
     void clearDirty() { dirty_mask_ = 0; }
     void markAllDirty();
@@ -64,9 +84,14 @@ private:
     int utf8_rem_ = 0;
 
     Cell cells_[40 * 24]{};
+    Cell scrollback_[kMaxScrollback * 40]{};
+    int sb_head_ = 0;
+    int sb_count_ = 0;
+    int view_offset_ = 0;
     uint32_t dirty_mask_ = 0;
 
     void markRowDirty(int r);
+    void pushScrollbackRow(int src_row);
     void putChar(char ch);
     void lineFeed();
     void reverseIndex();

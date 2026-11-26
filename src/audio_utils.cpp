@@ -1,6 +1,8 @@
 #include "audio_utils.h"
 
+#include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -70,6 +72,29 @@ std::string formatMmSs(uint32_t total_sec) {
                   static_cast<unsigned long>(mm),
                   static_cast<unsigned long>(ss));
     return buf;
+}
+
+uint8_t volumePctToHardware(int pct) {
+    int clamped = std::max(0, std::min(100, pct));
+    return static_cast<uint8_t>((clamped * 255 + 50) / 100);
+}
+
+int stepVolumePct(int current_pct, int dir, uint8_t repeat_count) {
+    if (dir == 0) return std::max(0, std::min(100, current_pct));
+    int step = 1;
+    if (repeat_count >= 19) step = 5;
+    else if (repeat_count >= 11) step = 4;
+    else if (repeat_count >= 5) step = 2;
+    int delta = (dir > 0) ? step : -step;
+    return std::max(0, std::min(100, current_pct + delta));
+}
+
+float pcmRmsToDbSpl(double rms, float cal_offset_db) {
+    float dbfs = (rms < 1.0) ? -90.0f : static_cast<float>(20.0 * std::log10(rms / 32768.0));
+    float spl = dbfs + cal_offset_db;
+    if (spl < 25.0f) return 25.0f;
+    if (spl > 120.0f) return 120.0f;
+    return spl;
 }
 
 }  // namespace audio_utils

@@ -53,14 +53,18 @@ void runDateTimeApp() {
         auto& cv = ui::canvas();
         cv.fillScreen(cfg::COL_BG);
         time_sync::TimeSource src = time_sync::timeSource();
-        ui::drawHeader("Date & Time", time_sync::timeSourceLabel(), sourceBadgeColor(src));
+        ui::drawHeader("Date & Time");
 
-        // Live clock banner
+        // Live clock banner + source tag on right
         std::string clk = (src != time_sync::TimeSource::UNSYNCED)
-                              ? (time_sync::formatDisplayTime() + "  " + time_sync::formatTzLabel(st.tz_offset_hours))
-                              : ("Not set  (" + time_sync::formatTzLabel(st.tz_offset_hours) + ")");
+                              ? (time_sync::formatDisplayTime() + " " + time_sync::formatTzLabel(st.tz_offset_hours))
+                              : ("Not set (" + time_sync::formatTzLabel(st.tz_offset_hours) + ")");
         cv.setTextColor((src != time_sync::TimeSource::UNSYNCED) ? cfg::COL_CYAN : cfg::COL_YELLOW, cfg::COL_BG);
-        cv.drawString(ui::fitCols(clk, 37).c_str(), 10, 25);
+        cv.drawString(ui::fitCols(clk, 29).c_str(), 10, 25);
+        cv.setTextDatum(top_right);
+        cv.setTextColor(sourceBadgeColor(src), cfg::COL_BG);
+        cv.drawString(time_sync::timeSourceLabel(), 230, 25);
+        cv.setTextDatum(top_left);
 
         std::string date_str = (src != time_sync::TimeSource::UNSYNCED) ? time_sync::formatDateYmd() : "(not set)";
         std::string time_str = (src != time_sync::TimeSource::UNSYNCED) ? time_sync::formatTimeHms() : "(not set)";
@@ -83,13 +87,12 @@ void runDateTimeApp() {
             cv.drawString(ui::fitCols(rows[idx], 36).c_str(), 10, y + 2);
         }
 
-        ui::drawHints(sel == 3 ? "Enter edit  ,/ step" : "Enter edit/sync", "Q / G0 back");
+        ui::drawHints(sel == 3 ? "Enter edit  ,/ step" : "Enter edit/sync", "ESC / G0 back");
         cv.pushSprite(0, 0);
 
         KeyInput k = ui::pollInput();
         ui::applyMenuNav(k);
-        char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
-        if (k.esc || k.btn_g0 || lc == 'q') {
+        if (k.esc || k.btn_g0) {
             ui::waitKeyRelease();
             return;
         }

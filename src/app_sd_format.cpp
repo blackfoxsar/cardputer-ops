@@ -150,7 +150,9 @@ bool createDefaultSdLayout() {
         "  `/recordings/yyyyMMdd_HHmmss.wav`.\n"
         "- `/music/`\n"
         "  Audio Playback library folder. Put `.mp3` or `.wav` audio files here.\n"
-        "  (Keep separate from `/recordings/` so voice memos and music stay organized.)\n";
+        "  (Keep separate from `/recordings/` so voice memos and music stay organized.)\n"
+        "- `/notes/`\n"
+        "  Text Editor default folder for notes and text files (`.txt`, `.md`, etc.).\n";
 
     SPI.begin(cfg::SD_SCK, cfg::SD_MISO, cfg::SD_MOSI, cfg::SD_CS);
     if (!SD.begin(cfg::SD_CS, SPI, 25000000)) {
@@ -165,6 +167,7 @@ bool createDefaultSdLayout() {
         cfg::SD_DIR_LOGS,
         cfg::SD_DIR_RECORDINGS,
         cfg::SD_DIR_MUSIC,
+        cfg::SD_DIR_NOTES,
     };
     for (const char* d : dirs) {
         if (!SD.exists(d)) {
@@ -266,12 +269,12 @@ void runSdFormatApp() {
 
         cv.setTextColor(cfg::COL_CREAM, cfg::COL_BG);
         cv.drawString("Format as FAT32?", 10, 96);
-        ui::drawHints("Y next  Space opt", "N / Q cancel");
+        ui::drawHints("Y next  Space opt", "N / ESC cancel");
         cv.pushSprite(0, 0);
 
         KeyInput k = ui::pollInput();
         char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
-        if (k.esc || k.btn_g0 || lc == 'n' || lc == 'q') {
+        if (k.esc || k.btn_g0 || lc == 'n') {
             ui::waitKeyRelease();
             return;
         }

@@ -16,6 +16,7 @@ constexpr const char* PATH_WIFI_CSV    = "/wifi.csv";
 constexpr const char* PATH_KNOWN_CSV   = "/known_hosts.csv";
 constexpr const char* PATH_KEYS_DIR    = "/keys";
 constexpr const char* PATH_SETTINGS    = "/settings.cfg";
+constexpr const char* FILE_ALARMS      = "/alarms.cfg";
 
 // microSD import/export paths (relative to SD root)
 constexpr const char* SD_DIR_SSH        = "/ssh";
@@ -23,6 +24,7 @@ constexpr const char* SD_DIR_KEYS       = "/ssh/keys";
 constexpr const char* SD_DIR_LOGS       = "/ssh/logs";
 constexpr const char* SD_DIR_RECORDINGS = "/recordings";
 constexpr const char* SD_DIR_MUSIC      = "/music";
+constexpr const char* SD_DIR_NOTES      = "/notes";
 constexpr const char* SD_HOSTS_CSV      = "/ssh/hosts.csv";
 constexpr const char* SD_WIFI_CSV       = "/ssh/wifi.csv";
 constexpr const char* SD_README_MD      = "/README.md";

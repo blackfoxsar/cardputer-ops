@@ -1,10 +1,6 @@
 #include "app_wifi.h"
 
 #include <WiFi.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <lwip/sockets.h>
-#include <sys/select.h>
 
 #include <algorithm>
 #include <cctype>
@@ -231,200 +227,13 @@ bool isValidIpv4Literal(const std::string& s) {
     return dots == 3 && digits > 0 && part <= 255;
 }
 
-void parseHostPort(const std::string& raw, std::string& host, uint16_t& port) {
-    port = 80;
-    size_t colon = raw.rfind(':');
-    if (colon != std::string::npos && raw.find(':') == colon && colon > 0) {
-        std::string pstr = raw.substr(colon + 1);
-        bool all_dig = !pstr.empty();
-        for (char c : pstr) {
-            if (c < '0' || c > '9') {
-                all_dig = false;
-                break;
-            }
-        }
-        if (all_dig) {
-            int pv = std::atoi(pstr.c_str());
-            if (pv >= 1 && pv <= 65535) {
-                host = raw.substr(0, colon);
-                port = static_cast<uint16_t>(pv);
-                return;
-            }
-        }
-    }
-    host = raw;
-}
-
-struct ProbeResult {
-    bool ok = false;
-    bool rst = false;
-    float rtt_ms = 0.0f;
-};
-
-ProbeResult tcpPingOnce(const IPAddress& ip, uint16_t port, uint32_t timeout_ms) {
-    ProbeResult res;
-    int sock = lwip_socket(AF_INET, SOCK_STREAM, 0);
-    if (sock < 0) return res;
-
-    int flags = lwip_fcntl(sock, F_GETFL, 0);
-    lwip_fcntl(sock, F_SETFL, flags | O_NONBLOCK);
-
-    sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
-    addr.sin_addr.s_addr = static_cast<uint32_t>(ip);
-
-    uint64_t t0 = esp_timer_get_time();
-    int rc = lwip_connect(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
-    if (rc == 0) {
-        res.ok = true;
-        res.rtt_ms = static_cast<float>(esp_timer_get_time() - t0) / 1000.0f;
-        lwip_close(sock);
-        return res;
-    }
-
-    if (errno == EINPROGRESS) {
-        fd_set wfds;
-        FD_ZERO(&wfds);
-        FD_SET(sock, &wfds);
-        timeval tv{};
-        tv.tv_sec = timeout_ms / 1000;
-        tv.tv_usec = (timeout_ms % 1000) * 1000;
-        int sel = lwip_select(sock + 1, nullptr, &wfds, nullptr, &tv);
-        if (sel > 0) {
-            int so_err = 0;
-            socklen_t len = sizeof(so_err);
-            lwip_getsockopt(sock, SOL_SOCKET, SO_ERROR, &so_err, &len);
-            float dt = static_cast<float>(esp_timer_get_time() - t0) / 1000.0f;
-            if (so_err == 0) {
-                res.ok = true;
-                res.rtt_ms = dt;
-            } else if (so_err == ECONNREFUSED) {
-                res.ok = true;
-                res.rst = true;
-                res.rtt_ms = dt;
-            }
-        }
-    }
-    lwip_close(sock);
-    return res;
-}
-
-void runPingScreen() {
-    std::string target;
-    if (!ui::promptText("TCP Ping", "Enter host or host:port", target, false, 63) || target.empty()) {
-        return;
-    }
-
-    std::string host;
-    uint16_t port = 80;
-    parseHostPort(target, host, port);
-
-    IPAddress ip;
-    bool resolved = false;
-    if (isValidIpv4Literal(host)) {
-        resolved = ip.fromString(host.c_str());
-    } else {
-        resolved = (WiFi.hostByName(host.c_str(), ip) == 1);
-    }
-
-    if (!resolved) {
-        ui::showToast("Ping Failed", "DNS resolve failed:", host, cfg::COL_RED);
-        return;
-    }
-
-    std::vector<std::string> lines;
-    std::vector<uint16_t> colors;
-    lines.push_back("Target: " + std::string(ip.toString().c_str()) + ":" + std::to_string(port));
-    colors.push_back(cfg::COL_GRAY);
-
-    std::vector<float> rtts;
-    bool stopped = false;
-    ui::waitKeyRelease();
-
-    for (int seq = 1; seq <= 4; ++seq) {
-        auto& cv = ui::canvas();
-        cv.fillScreen(cfg::COL_BG);
-        std::string hdr = "Ping " + ui::fitCols(host, 18);
-        ui::drawHeader(hdr.c_str());
-        for (size_t i = 0; i < lines.size(); ++i) {
-            cv.setTextColor(colors[i], cfg::COL_BG);
-            cv.drawString(lines[i].c_str(), 10, 26 + static_cast<int>(i) * 15);
-        }
-        std::string h = "Probe " + std::to_string(seq) + "/4...";
-        ui::drawHints(h.c_str(), "Q / G0 stop");
-        cv.pushSprite(0, 0);
-
-        KeyInput k = ui::pollInput();
-        char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
-        if (k.esc || k.btn_g0 || lc == 'q') {
-            stopped = true;
-            break;
-        }
-
-        ProbeResult pr = tcpPingOnce(ip, port, 2500);
-        if (pr.ok) {
-            rtts.push_back(pr.rtt_ms);
-            char buf[48];
-            snprintf(buf, sizeof(buf), "seq=%d  %.1f ms%s", seq, pr.rtt_ms, pr.rst ? " (rst)" : "");
-            lines.push_back(buf);
-            colors.push_back(cfg::COL_GREEN);
-        } else {
-            lines.push_back("seq=" + std::to_string(seq) + "  timeout/lost");
-            colors.push_back(cfg::COL_RED);
-        }
-    }
-
-    int sent = stopped ? static_cast<int>(lines.size() - 1) : 4;
-    std::string sum;
-    if (!rtts.empty()) {
-        float mn = rtts[0], mx = rtts[0], tot = 0.0f;
-        for (float v : rtts) {
-            if (v < mn) mn = v;
-            if (v > mx) mx = v;
-            tot += v;
-        }
-        char buf[64];
-        snprintf(buf, sizeof(buf), "%d/%d ok  min/avg/max %.1f/%.1f/%.1fms",
-                 static_cast<int>(rtts.size()), sent, mn, tot / rtts.size(), mx);
-        sum = buf;
-    } else {
-        sum = "0/" + std::to_string(sent) + " ok (100% loss)";
-    }
-    lines.push_back(sum);
-    colors.push_back(rtts.empty() ? cfg::COL_RED : cfg::COL_ORANGE);
-
-    ui::waitKeyRelease();
-    while (true) {
-        auto& cv = ui::canvas();
-        cv.fillScreen(cfg::COL_BG);
-        std::string hdr = "Ping " + ui::fitCols(host, 18);
-        ui::drawHeader(hdr.c_str());
-        for (size_t i = 0; i < lines.size(); ++i) {
-            cv.setTextColor(colors[i], cfg::COL_BG);
-            cv.drawString(ui::fitCols(lines[i], 38).c_str(), 8, 25 + static_cast<int>(i) * 15);
-        }
-        ui::drawHints("Done", "Q / Enter back");
-        cv.pushSprite(0, 0);
-
-        KeyInput k = ui::pollInput();
-        char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
-        if (k.esc || k.btn_g0 || k.enter || lc == 'q') {
-            ui::waitKeyRelease();
-            return;
-        }
-        delay(25);
-    }
-}
-
 bool showConnectionDetail(const std::string& ssid) {
     ui::waitKeyRelease();
     while (true) {
         auto& cv = ui::canvas();
         cv.fillScreen(cfg::COL_BG);
         std::string hdr = "Wi-Fi: " + ssid;
-        ui::drawHeader(hdr.c_str(), g_conn_static ? "STATIC" : "DHCP",
-                       g_conn_static ? cfg::COL_YELLOW : cfg::COL_GREEN);
+        ui::drawHeader(hdr.c_str());
 
         cv.setTextColor(cfg::COL_CREAM, cfg::COL_BG);
         cv.drawString(("IP:   " + std::string(WiFi.localIP().toString().c_str())).c_str(), 8, 26);
@@ -434,13 +243,17 @@ bool showConnectionDetail(const std::string& ssid) {
         cv.drawString(("DNS:  " + std::string(WiFi.dnsIP().toString().c_str())).c_str(), 8, 71);
         std::string rssi_s = "RSSI: " + std::to_string(WiFi.RSSI()) + " dBm";
         cv.drawString(rssi_s.c_str(), 8, 86);
+        cv.setTextDatum(top_right);
+        cv.setTextColor(g_conn_static ? cfg::COL_YELLOW : cfg::COL_GREEN, cfg::COL_BG);
+        cv.drawString(g_conn_static ? "STATIC" : "DHCP", 232, 86);
+        cv.setTextDatum(top_left);
 
-        ui::drawHints("P ping  D disc", "Q / Enter list");
+        ui::drawHints("D disconnect", "ESC / Enter list");
         cv.pushSprite(0, 0);
 
         KeyInput k = ui::pollInput();
         char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
-        if (k.esc || k.btn_g0 || k.enter || lc == 'q') {
+        if (k.esc || k.btn_g0 || k.enter) {
             ui::waitKeyRelease();
             return true;
         }
@@ -450,10 +263,6 @@ bool showConnectionDetail(const std::string& ssid) {
             g_conn_static = false;
             ui::waitKeyRelease();
             return false;
-        }
-        if (lc == 'p') {
-            runPingScreen();
-            ui::waitKeyRelease();
         }
         delay(25);
     }
@@ -496,13 +305,12 @@ bool chooseIpMode(const std::string& display_ssid, IpPlan& plan) {
         } else {
             cv.drawString("Use Static IP if AP has no DHCP", 10, 76);
         }
-        ui::drawHints("Enter / 1-2 choose", "Q cancel");
+        ui::drawHints("Enter / 1-2 choose", "ESC / G0 cancel");
         cv.pushSprite(0, 0);
 
         KeyInput k = ui::pollInput();
         ui::applyMenuNav(k);
-        char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
-        if (k.esc || k.btn_g0 || lc == 'q') {
+        if (k.esc || k.btn_g0) {
             ui::waitKeyRelease();
             return false;
         }
@@ -557,13 +365,13 @@ bool editStaticIpForm(IpPlan& plan) {
             if (!vals[i].empty()) row += ": " + vals[i];
             cv.drawString(ui::fitCols(row, 37).c_str(), 8, y + 2);
         }
-        ui::drawHints("Enter edit/conn", "S conn  Q cancel");
+        ui::drawHints("Enter edit/conn", "S conn  ESC cancel");
         cv.pushSprite(0, 0);
 
         KeyInput k = ui::pollInput();
         ui::applyMenuNav(k);
         char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
-        if (k.esc || k.btn_g0 || lc == 'q') {
+        if (k.esc || k.btn_g0) {
             ui::waitKeyRelease();
             return false;
         }
@@ -685,21 +493,24 @@ bool connectToWifiFlow(const std::string& target_ssid, const std::string& pw, bo
 
             auto& cv = ui::canvas();
             cv.fillScreen(cfg::COL_BG);
-            ui::drawHeader("Wi-Fi Connecting", plan.use_dhcp ? "DHCP" : "STATIC",
-                           plan.use_dhcp ? cfg::COL_GRAY : cfg::COL_YELLOW);
+            ui::drawHeader("Wi-Fi Connecting");
             cv.setTextColor(cfg::COL_CREAM, cfg::COL_BG);
-            cv.drawString(ui::fitCols(disp_title, 36).c_str(), 10, 42);
+            cv.drawString(ui::fitCols(disp_title, 28).c_str(), 10, 42);
+            cv.setTextDatum(top_right);
+            cv.setTextColor(plan.use_dhcp ? cfg::COL_GRAY : cfg::COL_YELLOW, cfg::COL_BG);
+            cv.drawString(plan.use_dhcp ? "DHCP" : "STATIC", 230, 42);
+            cv.setTextDatum(top_left);
             cv.setTextColor(ever_l2 ? cfg::COL_GREEN : cfg::COL_GRAY, cfg::COL_BG);
             const char* st_msg = !ever_l2 ? "Associating AP..."
                                           : (plan.use_dhcp ? "AP linked! Waiting DHCP..."
                                                            : "Applying Static IP...");
             cv.drawString(st_msg, 10, 62);
-            ui::drawHints((plan.use_dhcp && ever_l2) ? "S static IP" : "Connecting...", "Q cancel");
+            ui::drawHints((plan.use_dhcp && ever_l2) ? "S static IP" : "Connecting...", "ESC cancel");
             cv.pushSprite(0, 0);
 
             KeyInput ck = ui::pollInput();
             char clc = ck.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(ck.ch))) : 0;
-            if (ck.esc || ck.btn_g0 || clc == 'q') {
+            if (ck.esc || ck.btn_g0) {
                 cancelled = true;
                 break;
             }
@@ -813,7 +624,6 @@ void runSavedWifiScreen() {
     while (true) {
         auto& cv = ui::canvas();
         cv.fillScreen(cfg::COL_BG);
-        bool connected = (WiFi.status() == WL_CONNECTED);
         ui::drawHeader("Saved Wi-Fi");
 
         if (saved.empty()) {
@@ -839,14 +649,14 @@ void runSavedWifiScreen() {
                 cv.setTextDatum(top_left);
             }
         }
-        ui::drawHints("Enter connect", "D del  Q back");
+        ui::drawHints("Enter connect", "D del  ESC back");
         cv.pushSprite(0, 0);
 
         KeyInput k = ui::pollInput();
         ui::applyMenuNav(k);
         char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
 
-        if (k.esc || k.btn_g0 || lc == 'q') {
+        if (k.esc || k.btn_g0) {
             ui::waitKeyRelease();
             return;
         }
@@ -921,14 +731,14 @@ void runWifiScannerApp() {
                 cv.setTextDatum(top_left);
             }
         }
-        ui::drawHints("Enter conn  S saved", connected ? "I info  R scan" : "R scan  Q back");
+        ui::drawHints("Enter conn  S saved", connected ? "I info  R scan" : "R scan  ESC back");
         cv.pushSprite(0, 0);
 
         KeyInput k = ui::pollInput();
         ui::applyMenuNav(k);
         char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
 
-        if (k.esc || k.btn_g0 || lc == 'q') {
+        if (k.esc || k.btn_g0) {
             ui::waitKeyRelease();
             return;
         }

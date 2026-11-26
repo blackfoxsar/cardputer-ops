@@ -17,6 +17,7 @@ struct KeyInput {
     bool ctrl = false;
     bool opt = false;
     bool btn_g0 = false;
+    uint8_t repeat_count = 0;
     char ch = 0;
 };
 
@@ -35,7 +36,8 @@ int readBatteryPct();
 uint16_t batteryColor(int pct);
 std::string batteryText(int pct);
 
-void drawHeader(const char* title, const char* right = nullptr, uint16_t right_col = 0x7BEF);
+void drawWifiIcon(int x, bool connected);
+void drawHeader(const char* title, bool show_date = false);
 void drawHints(const char* left, const char* right = nullptr);
 
 void showToast(const char* title, const std::string& line1, const std::string& line2 = "",

@@ -26,6 +26,7 @@ std::string formatDisplayTime();
 std::string formatShortTime();
 std::string formatClockHm();
 std::string formatDateYmd();
+std::string formatHeaderDate(int max_chars);
 std::string formatTimeHms();
 std::string formatLogFilenameStem(time_t t);
 std::string formatTzLabel(int tz_offset_hours);

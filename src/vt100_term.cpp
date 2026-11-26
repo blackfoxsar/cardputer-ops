@@ -25,6 +25,9 @@ void VT100Term::reset() {
     state_ = State::TEXT;
     csi_len_ = 0;
     utf8_rem_ = 0;
+    sb_head_ = 0;
+    sb_count_ = 0;
+    view_offset_ = 0;
     clearCells(0, 0, rows_ - 1, cols_ - 1);
     markAllDirty();
 }
@@ -50,10 +53,60 @@ void VT100Term::clearCells(int r0, int c0, int r1, int c1) {
             cell.ch = ' ';
             cell.fg = kDefaultFg;
             cell.bg = cur_bg_;
-            cell.bold = false;
-            cell.inverse = false;
+            cell.attr = 0;
         }
         markRowDirty(r);
+    }
+}
+
+void VT100Term::pushScrollbackRow(int src_row) {
+    if (src_row < 0 || src_row >= rows_) return;
+    int base = sb_head_ * cols_;
+    for (int c = 0; c < cols_; ++c) {
+        scrollback_[base + c] = cells_[src_row * cols_ + c];
+    }
+    sb_head_ = (sb_head_ + 1) % kMaxScrollback;
+    if (sb_count_ < kMaxScrollback) {
+        ++sb_count_;
+    }
+}
+
+const VT100Term::Cell& VT100Term::viewCell(int r, int c) const {
+    if (view_offset_ <= 0) {
+        return cells_[r * cols_ + c];
+    }
+    int v = sb_count_ + r - view_offset_;
+    if (v >= sb_count_) {
+        int lr = std::min(rows_ - 1, v - sb_count_);
+        return cells_[lr * cols_ + c];
+    }
+    if (v < 0) v = 0;
+    int slot = (sb_head_ - sb_count_ + v + kMaxScrollback) % kMaxScrollback;
+    return scrollback_[slot * cols_ + c];
+}
+
+void VT100Term::scrollViewUp(int lines) {
+    if (lines <= 0 || sb_count_ == 0) return;
+    int next = std::min(sb_count_, view_offset_ + lines);
+    if (next != view_offset_) {
+        view_offset_ = next;
+        markAllDirty();
+    }
+}
+
+void VT100Term::scrollViewDown(int lines) {
+    if (lines <= 0 || view_offset_ == 0) return;
+    int next = std::max(0, view_offset_ - lines);
+    if (next != view_offset_) {
+        view_offset_ = next;
+        markAllDirty();
+    }
+}
+
+void VT100Term::resetScrollView() {
+    if (view_offset_ != 0) {
+        view_offset_ = 0;
+        markAllDirty();
     }
 }
 
@@ -63,6 +116,14 @@ void VT100Term::scrollUp(int top, int bottom, int n) {
     if (top >= bottom || n <= 0) return;
 
     int count = std::min(n, bottom - top + 1);
+    if (top == 0 && bottom == rows_ - 1) {
+        for (int k = 0; k < count; ++k) {
+            pushScrollbackRow(k);
+        }
+        if (view_offset_ > 0) {
+            view_offset_ = std::min(sb_count_, view_offset_ + count);
+        }
+    }
     for (int r = top; r <= bottom - count; ++r) {
         for (int c = 0; c < cols_; ++c) {
             cells_[r * cols_ + c] = cells_[(r + count) * cols_ + c];
@@ -115,8 +176,8 @@ void VT100Term::putChar(char ch) {
     cell.ch = ch;
     cell.fg = cur_fg_;
     cell.bg = cur_bg_;
-    cell.bold = cur_bold_;
-    cell.inverse = cur_inverse_;
+    cell.setBold(cur_bold_);
+    cell.setInverse(cur_inverse_);
     markRowDirty(cur_row_);
 
     if (cur_col_ + 1 >= cols_) {

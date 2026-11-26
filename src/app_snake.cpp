@@ -41,8 +41,8 @@ bool spawnFood(const std::vector<Pt>& snake, Pt& out_food) {
 void drawSnakeFrame(const std::vector<Pt>& snake, const Pt& food, int score) {
     auto& cv = ui::canvas();
     cv.fillScreen(cfg::COL_BG);
-    std::string sc = "score:" + std::to_string(score);
-    ui::drawHeader("Snake", sc.c_str(), cfg::COL_CREAM);
+    std::string sc = "Snake  S:" + std::to_string(score);
+    ui::drawHeader(sc.c_str());
 
     for (const auto& seg : snake) {
         cv.fillRect(seg.x * kCell, kPlayY + seg.y * kCell, kCell - 1, kCell - 1, cfg::COL_ORANGE);
@@ -64,12 +64,12 @@ bool gameOverScreen(int score, bool won) {
         std::string sc = "Score: " + std::to_string(score);
         cv.drawString(sc.c_str(), cfg::SCREEN_W / 2, 58);
         cv.setTextDatum(top_left);
-        ui::drawHints("R / Enter again", "Q / G0 back");
+        ui::drawHints("R / Enter again", "ESC / G0 back");
         cv.pushSprite(0, 0);
 
         KeyInput k = ui::pollInput();
         char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
-        if (k.esc || k.btn_g0 || lc == 'q') {
+        if (k.esc || k.btn_g0) {
             ui::waitKeyRelease();
             return false;
         }
@@ -108,7 +108,7 @@ void runSnakeApp() {
             ui::applyMenuNav(k);
             char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
 
-            if (k.esc || k.btn_g0 || lc == 'q') {
+            if (k.esc || k.btn_g0) {
                 early_exit = true;
                 break;
             }

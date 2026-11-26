@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "config.h"
+#include "app_alarm.h"
 #include "time_sync.h"
 
 namespace {
@@ -53,6 +54,7 @@ M5Canvas g_canvas(&M5Cardputer.Display);
 uint32_t g_last_repeat_ms = 0;
 std::string g_last_sig;
 bool g_repeating = false;
+uint8_t g_repeat_count = 0;
 
 std::string buildKeySig(const Keyboard_Class::KeysState& st) {
     std::string sig;
@@ -97,9 +99,11 @@ void waitKeyRelease(uint32_t max_ms) {
     g_last_sig = buildKeySig(M5Cardputer.Keyboard.keysState());
     g_last_repeat_ms = millis();
     g_repeating = false;
+    g_repeat_count = 0;
 }
 
 KeyInput pollInput(uint32_t repeat_ms) {
+    app_alarm::checkBackground();
     M5Cardputer.update();
     KeyInput out;
 
@@ -114,6 +118,7 @@ KeyInput pollInput(uint32_t repeat_ms) {
     if (sig.empty()) {
         g_last_sig.clear();
         g_repeating = false;
+        g_repeat_count = 0;
         return out;
     }
 
@@ -125,16 +130,19 @@ KeyInput pollInput(uint32_t repeat_ms) {
         if (non_repeat) {
             return out;
         }
-        uint32_t need_ms = (!g_repeating && repeat_ms >= 150) ? std::max<uint32_t>(repeat_ms, 350) : repeat_ms;
+        uint32_t need_ms = (!g_repeating && repeat_ms >= 150) ? std::max<uint32_t>(repeat_ms, 320)
+                           : (!g_repeating ? std::max<uint32_t>(repeat_ms, 280) : repeat_ms);
         if (now - g_last_repeat_ms < need_ms) {
             return out;
         }
         g_repeating = true;
+        if (g_repeat_count < 255) ++g_repeat_count;
         g_last_repeat_ms = now;
     } else {
         g_last_sig = sig;
         g_last_repeat_ms = now;
         g_repeating = false;
+        g_repeat_count = 0;
     }
 
     out.fn = st.fn;
@@ -143,6 +151,7 @@ KeyInput pollInput(uint32_t repeat_ms) {
     out.enter = st.enter;
     out.del = st.del;
     out.tab = st.tab;
+    out.repeat_count = g_repeat_count;
 
     if (!st.word.empty()) {
         char c = st.word[0];
@@ -213,7 +222,7 @@ void drawWifiIcon(int x, bool connected) {
     }
 }
 
-void drawHeader(const char* title, const char* right, uint16_t right_col) {
+void drawHeader(const char* title, bool show_date) {
     g_canvas.fillRect(0, 0, cfg::SCREEN_W, 20, cfg::COL_DARK);
     g_canvas.fillRect(0, 20, cfg::SCREEN_W, 1, cfg::COL_ORANGE);
     g_canvas.setTextSize(1);
@@ -232,22 +241,39 @@ void drawHeader(const char* title, const char* right, uint16_t right_col) {
     bool wifi_ok = (WiFi.status() == WL_CONNECTED);
     drawWifiIcon(icon_x, wifi_ok);
 
-    // Left of Wi-Fi icon: explicit right label or current HH:mm clock
-    std::string tag = (right && *right) ? std::string(right) : time_sync::formatClockHm();
-    uint16_t tag_col = (right && *right)
-                           ? right_col
-                           : (time_sync::isTimeSynced() ? cfg::COL_CREAM : cfg::COL_GRAY);
-    int tag_x = icon_x - 5;
-    int tag_px = static_cast<int>(tag.size()) * 6;
+    // Left of Wi-Fi icon: always current HH:mm clock
+    std::string clk = time_sync::formatClockHm();
+    uint16_t clk_col = time_sync::isTimeSynced() ? cfg::COL_CREAM : cfg::COL_GRAY;
+    int clk_x = icon_x - 5;
+    int clk_px = static_cast<int>(clk.size()) * 6;
     g_canvas.setTextDatum(top_right);
-    g_canvas.setTextColor(tag_col, cfg::COL_DARK);
-    g_canvas.drawString(tag.c_str(), tag_x, 6);
+    g_canvas.setTextColor(clk_col, cfg::COL_DARK);
+    g_canvas.drawString(clk.c_str(), clk_x, 6);
 
-    int title_max_px = std::max(36, tag_x - tag_px - 10);
+    int clk_left_x = clk_x - clk_px;
+    std::string title_str = title ? title : "";
+
+    // Optional date left of HH:mm (used on Main Screen)
+    int reserved_right_px = 0;
+    if (show_date && time_sync::isTimeSynced()) {
+        int title_end_x = 6 + static_cast<int>(title_str.size()) * 6 + 4;
+        int avail_px = clk_left_x - 5 - title_end_x;
+        int avail_chars = avail_px / 6;
+        std::string date_str = time_sync::formatHeaderDate(avail_chars);
+        if (!date_str.empty()) {
+            int date_x = clk_left_x - 5;
+            g_canvas.setTextDatum(top_right);
+            g_canvas.setTextColor(cfg::COL_GRAY, cfg::COL_DARK);
+            g_canvas.drawString(date_str.c_str(), date_x, 6);
+            reserved_right_px = static_cast<int>(date_str.size()) * 6 + 5;
+        }
+    }
+
+    int title_max_px = std::max(36, clk_left_x - reserved_right_px - 10);
     int max_title_chars = std::max(6, title_max_px / 6);
     g_canvas.setTextDatum(top_left);
     g_canvas.setTextColor(cfg::COL_ORANGE, cfg::COL_DARK);
-    g_canvas.drawString(fitCols(title ? title : "", static_cast<size_t>(max_title_chars)).c_str(), 6, 6);
+    g_canvas.drawString(fitCols(title_str, static_cast<size_t>(max_title_chars)).c_str(), 6, 6);
 }
 
 void drawHints(const char* left, const char* right) {
@@ -284,20 +310,16 @@ void showToast(const char* title, const std::string& line1, const std::string& l
     waitKeyRelease();
     while (true) {
         g_canvas.fillScreen(cfg::COL_BG);
-        if (scrollable) {
-            std::string right = std::to_string(scroll + 1) + "-" +
-                                std::to_string(std::min<size_t>(scroll + kMaxVis, rows.size())) + "/" +
-                                std::to_string(rows.size());
-            drawHeader(title, right.c_str(), cfg::COL_GRAY);
-        } else {
-            drawHeader(title);
-        }
+        drawHeader(title);
         for (size_t i = 0; i < kMaxVis && (scroll + i) < rows.size(); ++i) {
             g_canvas.setTextColor(rows[scroll + i].second, cfg::COL_BG);
             g_canvas.drawString(rows[scroll + i].first.c_str(), 8, 26 + static_cast<int>(i) * 12);
         }
         if (scrollable) {
-            drawHints(";. scroll", "Enter / Q close");
+            std::string page = std::to_string(scroll + 1) + "-" +
+                               std::to_string(std::min<size_t>(scroll + kMaxVis, rows.size())) + "/" +
+                               std::to_string(rows.size()) + "  ESC close";
+            drawHints(";. scroll", page.c_str());
         } else {
             drawHints("Press any key...");
         }
@@ -386,13 +408,15 @@ bool promptText(const char* title, const std::string& subtitle, std::string& val
         }
 
         g_canvas.fillScreen(cfg::COL_BG);
-        if (masked) {
-            drawHeader(title, show_plain ? "SHOW" : "MASK", show_plain ? cfg::COL_YELLOW : cfg::COL_GRAY);
-        } else {
-            drawHeader(title);
-        }
+        drawHeader(title);
         g_canvas.setTextColor(cfg::COL_GRAY, cfg::COL_BG);
-        g_canvas.drawString(fitCols(subtitle, 37).c_str(), 8, 30);
+        g_canvas.drawString(fitCols(subtitle, 31).c_str(), 8, 30);
+        if (masked) {
+            g_canvas.setTextDatum(top_right);
+            g_canvas.setTextColor(show_plain ? cfg::COL_YELLOW : cfg::COL_GRAY, cfg::COL_BG);
+            g_canvas.drawString(show_plain ? "[SHOW]" : "[MASK]", 232, 30);
+            g_canvas.setTextDatum(top_left);
+        }
 
         std::string full = (masked && !show_plain) ? std::string(value.size(), '*') : value;
         std::string shown = (view_start < full.size()) ? full.substr(view_start, kVisChars) : "";

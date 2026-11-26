@@ -15,6 +15,8 @@
 #include <string>
 #include <vector>
 
+#include "app_alarm.h"
+#include "audio_hw.h"
 #include "audio_utils.h"
 #include "config.h"
 #include "third_party/dr_mp3.h"
@@ -69,14 +71,6 @@ const char* repeatLabel(RepeatMode m) {
     }
 }
 
-void cleanAudioHandoff() {
-    M5Cardputer.Mic.end();
-    M5Cardputer.Speaker.stop();
-    M5Cardputer.Speaker.end();
-    gpio_reset_pin(GPIO_NUM_41);
-    gpio_reset_pin(GPIO_NUM_43);
-}
-
 void ensureMusicDir() {
     if (!SD.exists(cfg::SD_DIR_MUSIC)) {
         SD.mkdir(cfg::SD_DIR_MUSIC);
@@ -114,15 +108,12 @@ std::vector<MusicTrack> scanMusicTracks() {
 }
 
 void runTestTone1kHz() {
-    cleanAudioHandoff();
-
-    if (!M5Cardputer.Speaker.begin()) {
+    app_alarm::SuppressGuard alarm_guard;
+    int vol_pct = 50;
+    if (!audio_hw::prepareSpeaker(vol_pct)) {
         ui::showToast("Speaker Error", "Failed to start ES8311", "", cfg::COL_RED);
         return;
     }
-
-    uint8_t vol = 128;
-    M5Cardputer.Speaker.setVolume(vol);
 
     static int16_t tone_buf[480];
     static bool tone_ready = false;
@@ -144,7 +135,6 @@ void runTestTone1kHz() {
     while (true) {
         if (redraw) {
             redraw = false;
-            int vol_pct = (static_cast<int>(vol) * 100) / 255;
 
             auto& cv = ui::canvas();
             cv.fillScreen(cfg::COL_BG);
@@ -159,15 +149,14 @@ void runTestTone1kHz() {
             cv.setTextColor(cfg::COL_CYAN, cfg::COL_BG);
             cv.drawString(("Vol: " + std::to_string(vol_pct) + "%").c_str(), 8, 74);
 
-            ui::drawHints("Space:Mute  ;.:Vol", "Enter / Q:Back");
+            ui::drawHints("Space:Mute  ;.:Vol", "Enter / ESC:Back");
             cv.pushSprite(0, 0);
         }
 
-        KeyInput k = ui::pollInput(160);
+        KeyInput k = ui::pollInput(65);
         ui::applyMenuNav(k);
-        char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
 
-        if (k.enter || k.esc || k.btn_g0 || lc == 'q') {
+        if (k.enter || k.esc || k.btn_g0) {
             break;
         }
         if (k.ch == ' ') {
@@ -179,19 +168,18 @@ void runTestTone1kHz() {
             }
             redraw = true;
         } else if (k.up || k.ch == '+' || k.ch == '=') {
-            vol = static_cast<uint8_t>(std::min(255, static_cast<int>(vol) + 16));
-            M5Cardputer.Speaker.setVolume(vol);
+            vol_pct = audio_utils::stepVolumePct(vol_pct, +1, k.repeat_count);
+            M5Cardputer.Speaker.setVolume(audio_utils::volumePctToHardware(vol_pct));
             redraw = true;
         } else if (k.down || k.ch == '-') {
-            vol = static_cast<uint8_t>(std::max(0, static_cast<int>(vol) - 16));
-            M5Cardputer.Speaker.setVolume(vol);
+            vol_pct = audio_utils::stepVolumePct(vol_pct, -1, k.repeat_count);
+            M5Cardputer.Speaker.setVolume(audio_utils::volumePctToHardware(vol_pct));
             redraw = true;
         }
         delay(20);
     }
 
-    M5Cardputer.Speaker.stop();
-    M5Cardputer.Speaker.end();
+    audio_hw::restoreQuietSpeakerIdle();
     ui::waitKeyRelease();
 }
 
@@ -762,7 +750,7 @@ void audioDecodeTask(void* arg) {
 }
 
 bool runNowPlaying(const std::vector<MusicTrack>& tracks, int& io_cursor) {
-    cleanAudioHandoff();
+    app_alarm::SuppressGuard alarm_guard;
 
     auto ctx = std::unique_ptr<PlayerCtx>(new PlayerCtx());
     ctx->tracks = &tracks;
@@ -772,22 +760,20 @@ bool runNowPlaying(const std::vector<MusicTrack>& tracks, int& io_cursor) {
 
     M5Cardputer.Speaker.setBufferReleaseCallback(ctx.get(), spkBufReleased);
 
-    uint8_t vol = 160;
-    if (!M5Cardputer.Speaker.begin()) {
+    int vol_pct = 65;
+    if (!audio_hw::prepareSpeaker(vol_pct)) {
         M5Cardputer.Speaker.setBufferReleaseCallback(nullptr, nullptr);
         vSemaphoreDelete(ctx->mtx);
         vSemaphoreDelete(ctx->done);
         ui::showToast("Speaker Error", "Failed to start ES8311", "", cfg::COL_RED);
         return true;
     }
-    M5Cardputer.Speaker.setVolume(vol);
 
     TaskHandle_t task_h = nullptr;
     BaseType_t ok = xTaskCreate(audioDecodeTask, "audio_dec", 12288, ctx.get(), 2, &task_h);
     if (ok != pdPASS) {
-        M5Cardputer.Speaker.stop();
-        M5Cardputer.Speaker.end();
         M5Cardputer.Speaker.setBufferReleaseCallback(nullptr, nullptr);
+        audio_hw::restoreQuietSpeakerIdle();
         vSemaphoreDelete(ctx->mtx);
         vSemaphoreDelete(ctx->done);
         ui::showToast("Memory Error", "Failed to start decoder task", "", cfg::COL_RED);
@@ -819,7 +805,6 @@ bool runNowPlaying(const std::vector<MusicTrack>& tracks, int& io_cursor) {
             uint32_t rate = ctx->cur_sample_rate.load(std::memory_order_acquire);
             uint32_t frames = ctx->frames_played.load(std::memory_order_acquire);
             uint32_t sec = rate ? (frames / rate) : 0;
-            int vol_pct = (static_cast<int>(vol) * 100) / 255;
 
             auto& cv = ui::canvas();
             cv.fillScreen(cfg::COL_BG);
@@ -853,15 +838,15 @@ bool runNowPlaying(const std::vector<MusicTrack>& tracks, int& io_cursor) {
             cv.setTextColor(cfg::COL_ORANGE, cfg::COL_BG);
             cv.drawString(("Elapsed: " + audio_utils::formatMmSs(sec)).c_str(), 8, 84);
 
-            ui::drawHints("Space:Pause ,/:Prev/Nxt", ";.:Vol M:Rep Q:List");
+            ui::drawHints("Space:Pause ,/:Prev/Nxt", ";.:Vol M:Rep ESC:List");
             cv.pushSprite(0, 0);
         }
 
-        KeyInput k = ui::pollInput(160);
+        KeyInput k = ui::pollInput(65);
         ui::applyMenuNav(k);
         char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
 
-        if (k.esc || k.btn_g0 || k.enter || lc == 'q' || lc == 'l') {
+        if (k.esc || k.btn_g0 || k.enter || lc == 'l') {
             back_to_list = true;
             break;
         }
@@ -879,12 +864,12 @@ bool runNowPlaying(const std::vector<MusicTrack>& tracks, int& io_cursor) {
             ctx->track_req.fetch_add(1);
             last_draw = 0;
         } else if (k.up || k.ch == '+' || k.ch == '=') {
-            vol = static_cast<uint8_t>(std::min(255, static_cast<int>(vol) + 16));
-            M5Cardputer.Speaker.setVolume(vol);
+            vol_pct = audio_utils::stepVolumePct(vol_pct, +1, k.repeat_count);
+            M5Cardputer.Speaker.setVolume(audio_utils::volumePctToHardware(vol_pct));
             last_draw = 0;
         } else if (k.down || k.ch == '-') {
-            vol = static_cast<uint8_t>(std::max(0, static_cast<int>(vol) - 16));
-            M5Cardputer.Speaker.setVolume(vol);
+            vol_pct = audio_utils::stepVolumePct(vol_pct, -1, k.repeat_count);
+            M5Cardputer.Speaker.setVolume(audio_utils::volumePctToHardware(vol_pct));
             last_draw = 0;
         } else if (lc == 'm') {
             int rm = (ctx->repeat_mode.load(std::memory_order_acquire) + 1) % 3;
@@ -899,9 +884,8 @@ bool runNowPlaying(const std::vector<MusicTrack>& tracks, int& io_cursor) {
     ctx->abort_track.store(true, std::memory_order_release);
     M5Cardputer.Speaker.stop(0);
     xSemaphoreTake(ctx->done, pdMS_TO_TICKS(3000));
-    M5Cardputer.Speaker.stop();
-    M5Cardputer.Speaker.end();
     M5Cardputer.Speaker.setBufferReleaseCallback(nullptr, nullptr);
+    audio_hw::restoreQuietSpeakerIdle();
     vSemaphoreDelete(ctx->mtx);
     vSemaphoreDelete(ctx->done);
     ui::waitKeyRelease();
@@ -969,14 +953,14 @@ void runMusicApp() {
             cv.drawString("No .mp3 / .wav in /music/", 8, 56);
         }
 
-        ui::drawHints("Enter play", "R rescan  Q back");
+        ui::drawHints("Enter play", "R rescan  ESC back");
         cv.pushSprite(0, 0);
 
         KeyInput k = ui::pollInput();
         ui::applyMenuNav(k);
         char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
 
-        if (k.esc || k.btn_g0 || lc == 'q') {
+        if (k.esc || k.btn_g0) {
             ui::waitKeyRelease();
             return;
         }

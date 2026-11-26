@@ -6,9 +6,14 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <vector>
 
+#include "app_alarm.h"
+#include "app_db_meter.h"
+#include "app_editor.h"
 #include "app_music.h"
+#include "app_net_tools.h"
 #include "app_recorder.h"
 #include "app_sd_format.h"
 #include "app_snake.h"
@@ -52,13 +57,12 @@ void runKeyGenDialog() {
             }
             cv.drawString(types[i], 12, y + 2);
         }
-        ui::drawHints("Enter choose", "Q / G0 cancel");
+        ui::drawHints("Enter choose", "ESC / G0 cancel");
         cv.pushSprite(0, 0);
 
         KeyInput k = ui::pollInput();
         ui::applyMenuNav(k);
-        char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
-        if (k.esc || k.btn_g0 || lc == 'q') return;
+        if (k.esc || k.btn_g0) return;
         if (k.up) sel = (sel + 2) % 3;
         if (k.down) sel = (sel + 1) % 3;
         if (k.enter) {
@@ -123,13 +127,12 @@ void runKeyExportDialog(const std::string& priv_name, bool has_pub) {
 
             cv.setTextColor(cfg::COL_GRAY, cfg::COL_BG);
             cv.drawString(ui::fitCols("/sd/ssh/keys/" + priv_name, 37).c_str(), 10, 76);
-            ui::drawHints("Enter / 1-2 export", "Q cancel");
+            ui::drawHints("Enter / 1-2 export", "ESC cancel");
             cv.pushSprite(0, 0);
 
             KeyInput k = ui::pollInput();
             ui::applyMenuNav(k);
-            char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
-            if (k.esc || k.btn_g0 || lc == 'q') {
+            if (k.esc || k.btn_g0) {
                 ui::waitKeyRelease();
                 return;
             }
@@ -187,13 +190,16 @@ void runKeyDetailScreen(const std::string& priv_name) {
     while (true) {
         auto& cv = ui::canvas();
         cv.fillScreen(cfg::COL_BG);
-        ui::drawHeader(priv_name.c_str(), has_pub ? "PRIV+PUB" : "PRIV",
-                       has_pub ? cfg::COL_GREEN : cfg::COL_YELLOW);
+        ui::drawHeader(priv_name.c_str());
 
         cv.setTextColor(cfg::COL_GRAY, cfg::COL_BG);
         std::string info = "Priv: " + std::to_string(priv.size()) + " B   " +
                            (has_pub ? ("Pub: " + std::to_string(pub.size()) + " B") : "Pub: none");
-        cv.drawString(ui::fitCols(info, 37).c_str(), 8, 25);
+        cv.drawString(ui::fitCols(info, 29).c_str(), 8, 25);
+        cv.setTextDatum(top_right);
+        cv.setTextColor(has_pub ? cfg::COL_GREEN : cfg::COL_YELLOW, cfg::COL_BG);
+        cv.drawString(has_pub ? "PRIV+PUB" : "PRIV", 232, 25);
+        cv.setTextDatum(top_left);
 
         if (lines.empty()) {
             cv.setTextColor(cfg::COL_YELLOW, cfg::COL_BG);
@@ -206,13 +212,13 @@ void runKeyDetailScreen(const std::string& priv_name) {
         }
 
         bool scrollable = (lines.size() > kMaxVis);
-        ui::drawHints("E export SD", scrollable ? ";. scroll  Q back" : "Q back");
+        ui::drawHints("E export SD", scrollable ? ";. scroll  ESC back" : "ESC / G0 back");
         cv.pushSprite(0, 0);
 
         KeyInput k = ui::pollInput();
         ui::applyMenuNav(k);
         char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
-        if (k.esc || k.btn_g0 || lc == 'q') {
+        if (k.esc || k.btn_g0) {
             ui::waitKeyRelease();
             return;
         }
@@ -273,13 +279,12 @@ void runKeyImportSdScreen() {
             cv.drawString(ui::fitCols(opts[idx], 34).c_str(), 10, y + 2);
         }
 
-        ui::drawHints("Enter import", "Q back");
+        ui::drawHints("Enter import", "ESC back");
         cv.pushSprite(0, 0);
 
         KeyInput k = ui::pollInput();
         ui::applyMenuNav(k);
-        char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
-        if (k.esc || k.btn_g0 || lc == 'q') {
+        if (k.esc || k.btn_g0) {
             ui::waitKeyRelease();
             return;
         }
@@ -357,13 +362,13 @@ void runKeysScreen() {
                 cv.drawString(ui::fitCols(keys[idx], 34).c_str(), 10, y + 2);
             }
         }
-        ui::drawHints("G:Gen I:SD Enter", "D:Del Q:Back");
+        ui::drawHints("G:Gen I:SD Enter", "D:Del ESC:Back");
         cv.pushSprite(0, 0);
 
         KeyInput k = ui::pollInput();
         ui::applyMenuNav(k);
         char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
-        if (k.esc || k.btn_g0 || lc == 'q') return;
+        if (k.esc || k.btn_g0) return;
         if (lc == 'g') {
             runKeyGenDialog();
             keys = storage::listKeys(false);
@@ -435,13 +440,12 @@ std::string pickKeyDialog(const std::string& current) {
             }
             cv.drawString(ui::fitCols(opts[idx], 34).c_str(), 10, y + 2);
         }
-        ui::drawHints("Enter select", "Q cancel");
+        ui::drawHints("Enter select", "ESC cancel");
         cv.pushSprite(0, 0);
 
         KeyInput k = ui::pollInput();
         ui::applyMenuNav(k);
-        char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
-        if (k.esc || k.btn_g0 || lc == 'q') return current;
+        if (k.esc || k.btn_g0) return current;
         if (k.up) {
             sel = (sel - 1 + static_cast<int>(opts.size())) % static_cast<int>(opts.size());
             if (sel < scroll) scroll = sel;
@@ -501,14 +505,14 @@ bool editHostForm(HostProfile& p, bool is_new) {
             cv.drawString(ui::fitCols(row, 37).c_str(), 8, y + 2);
         }
 
-        ui::drawHints("Enter edit/toggle", "S save  Q cancel");
+        ui::drawHints("Enter edit/toggle", "S save  ESC cancel");
         cv.pushSprite(0, 0);
 
         KeyInput k = ui::pollInput();
         ui::applyMenuNav(k);
         char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
 
-        if (k.esc || k.btn_g0 || lc == 'q') return false;
+        if (k.esc || k.btn_g0) return false;
         if (k.up) {
             cursor = (cursor - 1 + kFields) % kFields;
             if (cursor < scroll) scroll = cursor;
@@ -557,39 +561,71 @@ uint16_t termPaletteColor(uint8_t idx, bool bold) {
     return kAnsi16[c];
 }
 
+void drawCompactWifiIcon(M5Canvas& cv, int x, bool connected) {
+    int cx = x + 5;
+    int cy = 11;
+    uint16_t col = connected ? cfg::COL_GREEN : cfg::COL_GRAY;
+    cv.fillCircle(cx, cy, 1, col);
+    cv.fillArc(cx, cy, 3, 2, 225.0f, 315.0f, col);
+    cv.fillArc(cx, cy, 6, 5, 225.0f, 315.0f, col);
+    cv.fillArc(cx, cy, 8, 7, 225.0f, 315.0f, col);
+    if (!connected) {
+        cv.drawLine(x, 2, x + 10, 12, cfg::COL_RED);
+    }
+}
+
 void renderTerminal(const HostProfile& profile, const char* log_tag = nullptr,
                     uint16_t log_col = cfg::COL_GREEN) {
     auto& cv = ui::canvas();
     cv.fillRect(0, 0, cfg::SCREEN_W, cfg::TERM_BAR_H, cfg::COL_DARK);
     cv.fillRect(0, cfg::TERM_BAR_H - 1, cfg::SCREEN_W, 1, cfg::COL_ORANGE);
     cv.setTextSize(1);
-    cv.setTextColor(cfg::COL_ORANGE, cfg::COL_DARK);
-    size_t max_hdr_cols = (log_tag && *log_tag) ? 16 : 21;
-    std::string hdr = ui::fitCols(profile.displayLabel(), max_hdr_cols);
-    if (profile.legacy) hdr += " [L]";
-    cv.drawString(hdr.c_str(), 4, 3);
 
     int pct = ui::readBatteryPct();
     std::string bat = ui::batteryText(pct);
+    int bat_px = static_cast<int>(bat.size()) * 6;
+
     cv.setTextDatum(top_right);
-    cv.setTextColor(cfg::COL_GRAY, cfg::COL_DARK);
-    cv.drawString("G0:Menu", cfg::SCREEN_W - 4, 3);
     cv.setTextColor(ui::batteryColor(pct), cfg::COL_DARK);
-    cv.drawString(bat.c_str(), cfg::SCREEN_W - 52, 3);
+    cv.drawString(bat.c_str(), cfg::SCREEN_W - 4, 3);
+
+    int icon_x = cfg::SCREEN_W - 4 - bat_px - 15;
+    drawCompactWifiIcon(cv, icon_x, WiFi.status() == WL_CONNECTED);
+
+    std::string clk = time_sync::formatClockHm();
+    int clk_x = icon_x - 4;
+    cv.setTextColor(time_sync::isTimeSynced() ? cfg::COL_CREAM : cfg::COL_GRAY, cfg::COL_DARK);
+    cv.drawString(clk.c_str(), clk_x, 3);
+
+    int right_edge = clk_x - static_cast<int>(clk.size()) * 6 - 4;
+    int sb_off = g_term.viewOffset();
+    if (sb_off > 0) {
+        std::string sb_tag = "[-" + std::to_string(sb_off) + "]";
+        cv.setTextColor(cfg::COL_YELLOW, cfg::COL_DARK);
+        cv.drawString(sb_tag.c_str(), right_edge, 3);
+        right_edge -= static_cast<int>(sb_tag.size()) * 6 + 4;
+    }
     if (log_tag && *log_tag) {
         cv.setTextColor(log_col, cfg::COL_DARK);
-        cv.drawString(log_tag, cfg::SCREEN_W - 84, 3);
+        cv.drawString(log_tag, right_edge, 3);
+        right_edge -= static_cast<int>(std::strlen(log_tag)) * 6 + 4;
     }
-    cv.setTextDatum(top_left);
 
+    cv.setTextDatum(top_left);
+    size_t max_hdr_cols = static_cast<size_t>(std::max(6, (right_edge - 6) / 6));
+    std::string hdr = profile.displayLabel() + (profile.legacy ? "[L]" : "");
+    cv.setTextColor(cfg::COL_ORANGE, cfg::COL_DARK);
+    cv.drawString(ui::fitCols(hdr, max_hdr_cols).c_str(), 4, 3);
+
+    bool show_cur = (sb_off == 0) && g_term.cursorVisible();
     for (int r = 0; r < g_term.rows(); ++r) {
         int y = cfg::TERM_BAR_H + r * 8;
         for (int c = 0; c < g_term.cols(); ++c) {
-            const auto& cell = g_term.cell(r, c);
-            bool is_cur = g_term.cursorVisible() && (r == g_term.cursorRow() && c == g_term.cursorCol());
-            uint16_t fg = termPaletteColor(cell.fg, cell.bold);
+            const auto& cell = g_term.viewCell(r, c);
+            bool is_cur = show_cur && (r == g_term.cursorRow() && c == g_term.cursorCol());
+            uint16_t fg = termPaletteColor(cell.fg, cell.bold());
             uint16_t bg = termPaletteColor(cell.bg, false);
-            if (cell.inverse || is_cur) {
+            if (cell.inverse() || is_cur) {
                 std::swap(fg, bg);
                 if (is_cur && fg == bg) {
                     bg = cfg::COL_ORANGE;
@@ -654,6 +690,7 @@ void runSshSession(const HostProfile& profile) {
 
     uint8_t rx_buf[512];
     int last_bat_pct = ui::readBatteryPct();
+    std::string last_clk_hm = time_sync::formatClockHm();
     SessionLogger logger;
     bool want_log = storage::loadSettings().sd_log_enabled;
     bool log_started = false;
@@ -664,10 +701,13 @@ void runSshSession(const HostProfile& profile) {
         if (st == SshEngine::State::CONNECTING) {
             auto& cv = ui::canvas();
             cv.fillScreen(cfg::COL_BG);
-            ui::drawHeader("SSH Connecting", profile.legacy ? "LEGACY" : "MODERN",
-                           profile.legacy ? cfg::COL_YELLOW : cfg::COL_GREEN);
+            ui::drawHeader("SSH Connecting");
             cv.setTextColor(cfg::COL_CREAM, cfg::COL_BG);
-            cv.drawString(ui::fitCols(profile.displayLabel(), 36).c_str(), 10, 42);
+            cv.drawString(ui::fitCols(profile.displayLabel(), 28).c_str(), 10, 42);
+            cv.setTextDatum(top_right);
+            cv.setTextColor(profile.legacy ? cfg::COL_YELLOW : cfg::COL_GREEN, cfg::COL_BG);
+            cv.drawString(profile.legacy ? "LEGACY" : "MODERN", 230, 42);
+            cv.setTextDatum(top_left);
             cv.setTextColor(cfg::COL_GRAY, cfg::COL_BG);
             cv.drawString(ui::fitCols(g_ssh.statusText(), 36).c_str(), 10, 62);
             ui::drawHints("G0 / ESC cancel");
@@ -737,6 +777,11 @@ void runSshSession(const HostProfile& profile) {
             last_bat_pct = cur_bat_pct;
             need_redraw = true;
         }
+        std::string cur_clk_hm = time_sync::formatClockHm();
+        if (cur_clk_hm != last_clk_hm) {
+            last_clk_hm = cur_clk_hm;
+            need_redraw = true;
+        }
         size_t rn = g_ssh.readRx(rx_buf, sizeof(rx_buf));
         if (rn > 0) {
             g_term.feed(reinterpret_cast<const char*>(rx_buf), rn);
@@ -747,13 +792,15 @@ void runSshSession(const HostProfile& profile) {
         }
         logger.pollFlush();
 
-        KeyInput k = ui::pollInput();
-        if (k.btn_g0 || (k.fn && k.ch && std::tolower(static_cast<unsigned char>(k.ch)) == 'q')) {
+        KeyInput k = ui::pollInput(90);
+        if (k.btn_g0) {
             int action = runSessionOverlay();
             if (action == 1) {
+                g_term.resetScrollView();
                 const uint8_t ctrl_c = 0x03;
                 g_ssh.writeTx(&ctrl_c, 1);
             } else if (action == 2) {
+                g_term.resetScrollView();
                 const uint8_t esc = 0x1B;
                 g_ssh.writeTx(&esc, 1);
             } else if (action == 3) {
@@ -766,6 +813,15 @@ void runSshSession(const HostProfile& profile) {
                 return;
             }
             need_redraw = true;
+        } else if (k.opt) {
+            // Opt key is reserved for local terminal scrollback paging (never transmitted over SSH).
+            if (k.ch == ';' || k.ch == ':' || k.up) {
+                g_term.scrollViewUp(7);
+                need_redraw = true;
+            } else if (k.ch == '.' || k.ch == '>' || k.down) {
+                g_term.scrollViewDown(7);
+                need_redraw = true;
+            }
         } else {
             uint8_t seq[4];
             size_t slen = 0;
@@ -777,7 +833,7 @@ void runSshSession(const HostProfile& profile) {
             else if (k.del) { seq[0] = 0x7F; slen = 1; }
             else if (k.tab) { seq[0] = '\t'; slen = 1; }
             else if (k.esc) { seq[0] = 0x1B; slen = 1; }
-            else if ((k.ctrl || k.opt) && k.ch != 0) {
+            else if (k.ctrl && k.ch != 0) {
                 char lc = static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch)));
                 if (lc >= 'a' && lc <= 'z') {
                     seq[0] = static_cast<uint8_t>(lc - 'a' + 1);
@@ -790,6 +846,10 @@ void runSshSession(const HostProfile& profile) {
                 slen = 1;
             }
             if (slen > 0) {
+                if (g_term.viewOffset() > 0) {
+                    g_term.resetScrollView();
+                    need_redraw = true;
+                }
                 g_ssh.writeTx(seq, slen);
             }
         }
@@ -843,14 +903,14 @@ void runHostsScreen() {
                 cv.setTextDatum(top_left);
             }
         }
-        ui::drawHints("Enter:Go N:New E:Edit", "D:Del Q:Back");
+        ui::drawHints("Enter:Go N:New E:Edit", "D:Del ESC:Back");
         cv.pushSprite(0, 0);
 
         KeyInput k = ui::pollInput();
         ui::applyMenuNav(k);
         char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
 
-        if (k.esc || k.btn_g0 || lc == 'q') {
+        if (k.esc || k.btn_g0) {
             ui::waitKeyRelease();
             return;
         }
@@ -915,13 +975,12 @@ void runSdSyncScreen() {
         }
         cv.setTextColor(cfg::COL_GRAY, cfg::COL_BG);
         cv.drawString("CSV: hosts.csv, wifi.csv, keys/*", 12, 82);
-        ui::drawHints("Enter run", "Q back");
+        ui::drawHints("Enter run", "ESC back");
         cv.pushSprite(0, 0);
 
         KeyInput k = ui::pollInput();
         ui::applyMenuNav(k);
-        char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
-        if (k.esc || k.btn_g0 || lc == 'q') return;
+        if (k.esc || k.btn_g0) return;
         if (k.up || k.down) sel = 1 - sel;
         if (k.enter) {
             SyncReport rep = (sel == 0) ? storage::importFromSD() : storage::exportToSD();
@@ -972,13 +1031,12 @@ void runSettingsScreen() {
                            std::to_string(fs.total_bytes / 1024) + " KB";
         cv.drawString(heap_s.c_str(), 10, 86);
         cv.drawString(fs_s.c_str(), 10, 101);
-        ui::drawHints("Enter toggle/run", "Q back");
+        ui::drawHints("Enter toggle/run", "ESC back");
         cv.pushSprite(0, 0);
 
         KeyInput k = ui::pollInput();
         ui::applyMenuNav(k);
-        char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
-        if (k.esc || k.btn_g0 || lc == 'q') {
+        if (k.esc || k.btn_g0) {
             ui::waitKeyRelease();
             return;
         }
@@ -998,6 +1056,119 @@ void runSettingsScreen() {
                 ui::showToast("Cleared", "Known hosts reset", "", cfg::COL_GREEN);
                 ui::waitKeyRelease();
             }
+        }
+        delay(25);
+    }
+}
+
+void runToolsFolderApp() {
+    int cursor = 0;
+    const char* items[4] = {
+        "1. Alarm",
+        "2. dB Meter",
+        "3. Text Editor",
+        "4. Format SD Card",
+    };
+
+    ui::waitKeyRelease();
+    while (true) {
+        auto& cv = ui::canvas();
+        cv.fillScreen(cfg::COL_BG);
+        ui::drawHeader("Tools");
+
+        for (int i = 0; i < 4; ++i) {
+            int y = 28 + i * 20;
+            if (i == cursor) {
+                cv.fillRect(4, y - 2, 232, 17, cfg::COL_ORANGE);
+                cv.setTextColor(cfg::COL_BG, cfg::COL_ORANGE);
+            } else {
+                cv.setTextColor(cfg::COL_CREAM, cfg::COL_BG);
+            }
+            cv.drawString(items[i], 10, y + 2);
+        }
+        ui::drawHints("Enter / 1-4 open", "ESC / G0 back");
+        cv.pushSprite(0, 0);
+
+        KeyInput k = ui::pollInput();
+        ui::applyMenuNav(k);
+        if (k.esc || k.btn_g0) {
+            ui::waitKeyRelease();
+            return;
+        }
+
+        int open_idx = -1;
+        if (k.up) cursor = (cursor + 3) % 4;
+        else if (k.down) cursor = (cursor + 1) % 4;
+        else if (k.enter) open_idx = cursor;
+        else if (k.ch >= '1' && k.ch <= '4') {
+            cursor = k.ch - '1';
+            open_idx = cursor;
+        }
+
+        if (open_idx == 0) {
+            runAlarmApp();
+            ui::waitKeyRelease();
+        } else if (open_idx == 1) {
+            runDbMeterApp();
+            ui::waitKeyRelease();
+        } else if (open_idx == 2) {
+            runTextEditorApp();
+            ui::waitKeyRelease();
+        } else if (open_idx == 3) {
+            runSdFormatApp();
+            ui::waitKeyRelease();
+        }
+        delay(25);
+    }
+}
+
+void runSettingsFolderApp() {
+    int cursor = 0;
+    const char* items[2] = {
+        "1. Wi-Fi",
+        "2. Date & Time",
+    };
+
+    ui::waitKeyRelease();
+    while (true) {
+        auto& cv = ui::canvas();
+        cv.fillScreen(cfg::COL_BG);
+        ui::drawHeader("Settings");
+
+        for (int i = 0; i < 2; ++i) {
+            int y = 30 + i * 22;
+            if (i == cursor) {
+                cv.fillRect(6, y - 2, 228, 18, cfg::COL_ORANGE);
+                cv.setTextColor(cfg::COL_BG, cfg::COL_ORANGE);
+            } else {
+                cv.setTextColor(cfg::COL_CREAM, cfg::COL_BG);
+            }
+            cv.drawString(items[i], 12, y + 2);
+        }
+        ui::drawHints("Enter / 1-2 open", "ESC / G0 back");
+        cv.pushSprite(0, 0);
+
+        KeyInput k = ui::pollInput();
+        ui::applyMenuNav(k);
+        if (k.esc || k.btn_g0) {
+            ui::waitKeyRelease();
+            return;
+        }
+
+        int open_idx = -1;
+        if (k.up || k.down) cursor = 1 - cursor;
+        else if (k.enter) open_idx = cursor;
+        else if (k.ch >= '1' && k.ch <= '2') {
+            cursor = k.ch - '1';
+            open_idx = cursor;
+        }
+
+        if (open_idx == 0) {
+            runWifiScannerApp();
+            ui::waitKeyRelease();
+        } else if (open_idx == 1) {
+            runDateTimeApp();
+            ui::waitKeyRelease();
         }
         delay(25);
     }
@@ -1026,13 +1197,12 @@ void runGamesFolderApp() {
             }
             cv.drawString(items[i], 12, y + 2);
         }
-        ui::drawHints("Enter / 1-2 play", "Q / G0 back");
+        ui::drawHints("Enter / 1-2 play", "ESC / G0 back");
         cv.pushSprite(0, 0);
 
         KeyInput k = ui::pollInput();
         ui::applyMenuNav(k);
-        char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
-        if (k.esc || k.btn_g0 || lc == 'q') {
+        if (k.esc || k.btn_g0) {
             ui::waitKeyRelease();
             return;
         }
@@ -1081,13 +1251,12 @@ void runSshClientApp() {
             }
             cv.drawString(items[i], 10, y + 2);
         }
-        ui::drawHints("Enter / 1-4 open", "Q back");
+        ui::drawHints("Enter / 1-4 open", "ESC / G0 back");
         cv.pushSprite(0, 0);
 
         KeyInput k = ui::pollInput();
         ui::applyMenuNav(k);
-        char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
-        if (k.esc || k.btn_g0 || lc == 'q') {
+        if (k.esc || k.btn_g0) {
             ui::waitKeyRelease();
             return;
         }
@@ -1136,6 +1305,7 @@ void UiShell::begin() {
 
     ui::initCanvas();
     storage::begin();
+    app_alarm::init();
     time_sync::applyTimezone(storage::loadSettings().tz_offset_hours);
 
     WiFi.persistent(false);
@@ -1144,21 +1314,23 @@ void UiShell::begin() {
 }
 
 void UiShell::tick() {
+    app_alarm::checkBackground();
+
     static int cursor = 0;
     constexpr int kMenuItems = 7;
     const char* items[kMenuItems] = {
         "1.SSH Client",
-        "2.Wi-Fi",
-        "3.Date & Time",
-        "4.SD Format",
-        "5.Voice Rec",
-        "6.Audio Playback",
-        "7.Games >",
+        "2.Net Tools >",
+        "3.Voice Rec",
+        "4.Audio Play",
+        "5.Tools >",
+        "6.Games >",
+        "7.Settings >",
     };
 
     auto& cv = ui::canvas();
     cv.fillScreen(cfg::COL_BG);
-    ui::drawHeader("Cardputer Ops");
+    ui::drawHeader("Cardputer Ops", true);
 
     for (int i = 0; i < kMenuItems; ++i) {
         int col = i % 2;
@@ -1204,22 +1376,22 @@ void UiShell::tick() {
         runSshClientApp();
         ui::waitKeyRelease();
     } else if (open_idx == 1) {
-        runWifiScannerApp();
+        runNetToolsMenu();
         ui::waitKeyRelease();
     } else if (open_idx == 2) {
-        runDateTimeApp();
-        ui::waitKeyRelease();
-    } else if (open_idx == 3) {
-        runSdFormatApp();
-        ui::waitKeyRelease();
-    } else if (open_idx == 4) {
         runRecorderApp();
         ui::waitKeyRelease();
-    } else if (open_idx == 5) {
+    } else if (open_idx == 3) {
         runMusicApp();
         ui::waitKeyRelease();
-    } else if (open_idx == 6) {
+    } else if (open_idx == 4) {
+        runToolsFolderApp();
+        ui::waitKeyRelease();
+    } else if (open_idx == 5) {
         runGamesFolderApp();
+        ui::waitKeyRelease();
+    } else if (open_idx == 6) {
+        runSettingsFolderApp();
         ui::waitKeyRelease();
     }
 

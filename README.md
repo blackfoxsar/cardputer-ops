@@ -4,30 +4,35 @@ Native C++ all-in-one firmware for the **M5Stack Cardputer-Adv** (ESP32-S3, TCA8
 
 ## Built-in Apps
 
-The launcher uses a two-column grid (`1-7` hotkeys or `; . , /` navigation + `Enter`), with a top-right status bar displaying current time (`HH:mm`), Wi-Fi status icon, and battery percentage (`GPIO10`):
+The launcher uses a two-column grid (`1-7` hotkeys or `; . , /` navigation + `Enter`), with a persistent top-right status bar across every screen showing current time (`HH:mm`), Wi-Fi status icon, and battery percentage (`GPIO10`), plus the current date (`yyyy-MM-dd`) on the home screen. Most screens exit/go back uniformly via `ESC` (`Fn+\``) or `BtnG0`.
 
 1. **SSH Client**
    - **Quick-connect host list**: Stores host profiles (Host, User, Password, Port, Key file, Legacy flag, Alias), showing `[L]`/`[K]`/`[P]` badges and `Enter:Go N:New E:Edit D:Del` hints.
+   - **Terminal scrollback paging**: Keeps 120 lines of history; press `Opt+;` / `Opt+.` to page up/down locally without transmitting `Opt` sequences to the remote host.
    - **Legacy SSH compatibility toggle**: Configurable per host or as a global default in `SSH Settings` to allow `ssh-rsa`, `diffie-hellman-group14-sha1`, `diffie-hellman-group1-sha1`, `aes128/192/256-cbc`, and `hmac-sha1`.
    - **SD terminal session logging**: When `SD Session Log` is enabled, ANSI escape sequences are stripped and sessions are written to `/ssh/logs/<host-or-ip>/yyyyMMdd_HHmmss.log` on microSD.
    - **Key-based authentication**: Generate **Ed25519**, **ECDSA P-256**, or **RSA-2048** key pairs on-device (saved to internal LittleFS `/keys/`). Press `E` on a key to export it (private+`.pub` or `.pub` only) to `/sd/ssh/keys/`, or press `I` in the key list to import individual or all keys from `/sd/ssh/keys/`.
    - **Bidirectional LittleFS <-> SD CSV sync**: Import or export `hosts.csv`, `wifi.csv`, and `keys/*` via `/sd/ssh/`.
    - **Password visibility toggle**: Press `Tab` in any password or passphrase field to toggle plain-text display vs. masked asterisks.
-2. **Wi-Fi**
-   - Offline boot by default (does not block startup waiting for Wi-Fi).
-   - 2.4 GHz scan with RSSI color coding, encryption badges, hidden SSID display (`<bssid>` when unsaved, `*<ssid>` when saved), and saved network management (`S`).
-   - Supports **DHCP** and **Static IP** (automatically prompts to switch to static IP if DHCP times out), IPv4/Gateway/DNS/RSSI inspection, and **TCP Ping** (`host:port` with TCP RST RTT measurement).
-3. **Date & Time**
-   - Live clock display with manual date (`YYYY-MM-DD`), time (`HH:MM[:SS]`), and timezone (`UTC-12` to `UTC+14`) configuration, custom NTP server, and manual or automatic NTP sync.
-4. **SD Format**
-   - Detects microSD card type and capacity, formats to **FAT32** after two-step `Y` -> `Enter` confirmation, and optionally initializes `/ssh`, `/ssh/keys`, `/ssh/logs`, `/recordings`, `/music`, and `/README.md` (`[X] Init folders & README.md`).
-5. **Voice Rec**
-   - Records 16 kHz 16-bit PCM WAV audio via the ES8311 microphone with a live level meter to `/recordings/yyyyMMdd_HHmmss.wav`, with built-in playback and deletion.
-6. **Audio Playback**
+2. **Net Tools >**
+   - **Ping**: Continuous ICMP Echo ping (with TTL and RTT) or TCP port ping (`host:port`) with Tx/Rx/Loss%/Avg stats.
+   - **Dig (DNS Lookup)**: UDP/53 DNS query tool supporting `A`, `AAAA`, `CNAME`, `MX`, `TXT`, `NS`, `PTR` records against system DNS or a custom server.
+   - **MTR (Traceroute)**: Live hop-by-hop ICMP TTL traceroute showing per-hop IP, loss %, and average RTT.
+3. **Voice Rec**
+   - Records 16 kHz 16-bit PCM WAV audio via the ES8311 microphone with a live level meter to `/recordings/yyyyMMdd_HHmmss.wav`, with built-in playback (1% volume steps with hold-to-accelerate), deletion, and clean ES8311 codec mute/idle teardown.
+4. **Audio Playback**
    - Built-in **1 kHz Test Tone**: a pure 1000 Hz sine wave that works without an SD card, useful for speaker / audio-path debugging.
-   - `.mp3` (decoded with `dr_mp3`) / `.wav` playback from `/music/` (kept separate from `/recordings/`), supporting ID3 title/artist display, pause/resume, previous/next track, volume adjustment, and repeat mode (`ALL` / `ONE` / `OFF`).
-7. **Games**
+   - `.mp3` (decoded with `dr_mp3`) / `.wav` playback from `/music/` (kept separate from `/recordings/`), supporting ID3 title/artist display, pause/resume, previous/next track, fine 1% volume adjustment (hold for fast ramp), and repeat mode (`ALL` / `ONE` / `OFF`).
+5. **Tools >**
+   - **1. Alarm**: Configure up to 6 alarms (`HH:MM`, Daily/Once, custom label, adjustable volume) persisted in LittleFS `/alarms.cfg`, with background trigger + 5-minute snooze.
+   - **2. dB Meter**: Real-time ES8311 microphone sound level meter showing dB SPL, Quiet/Moderate/Loud/High level, Min/Avg/Peak stats, rolling bar history, and adjustable calibration offset.
+   - **3. Text Editor**: microSD file browser (defaulting to `/notes/`, able to traverse up to `/`) and multi-line text editor (`Fn` arrows, `Ctrl+S` save, unsaved-change prompt).
+   - **4. Format SD Card**: Detects microSD card type/capacity, formats to **FAT32** after two-step `Y` -> `Enter` confirmation, and optionally initializes `/ssh`, `/ssh/keys`, `/ssh/logs`, `/recordings`, `/music`, `/notes`, and `/README.md`.
+6. **Games >**
    - Includes **1. Snake** and **2. Sudoku**.
+7. **Settings >**
+   - **1. Wi-Fi**: 2.4 GHz scan with RSSI color coding, encryption badges, hidden SSID display (`<bssid>` when unsaved, `*<ssid>` when saved), saved network management (`S`), **DHCP** and **Static IP** (with automatic fallback prompt if DHCP times out), and connection details (`I` / `D` disconnect).
+   - **2. Date & Time**: Live clock display with manual date (`YYYY-MM-DD`), time (`HH:MM[:SS]`), and timezone (`UTC-12` to `UTC+14`), custom NTP server, and NTP sync.
 
 ## SD Card CSV Templates (`/sd/ssh/`)
 

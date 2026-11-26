@@ -36,13 +36,12 @@ int showDifficultyMenu() {
             }
             cv.drawString(items[i], 14, y + 2);
         }
-        ui::drawHints("Enter / 1-3 play", "Q / G0 back");
+        ui::drawHints("Enter / 1-3 play", "ESC / G0 back");
         cv.pushSprite(0, 0);
 
         KeyInput k = ui::pollInput();
         ui::applyMenuNav(k);
-        char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
-        if (k.esc || k.btn_g0 || lc == 'q') {
+        if (k.esc || k.btn_g0) {
             ui::waitKeyRelease();
             return -1;
         }
@@ -62,11 +61,10 @@ int showDifficultyMenu() {
 void drawSudokuGrid(const sudoku_logic::Board& board,
                     const std::array<std::array<bool, 9>, 9>& clues,
                     const std::array<std::array<int8_t, 9>, 9>* results,
-                    int cr, int cc, const char* hdr_label, const char* hdr_right,
-                    uint16_t right_col) {
+                    int cr, int cc, const char* hdr_label) {
     auto& cv = ui::canvas();
     cv.fillScreen(cfg::COL_BG);
-    ui::drawHeader(hdr_label, hdr_right, right_col);
+    ui::drawHeader(hdr_label);
 
     for (int r = 0; r < 9; ++r) {
         for (int c = 0; c < 9; ++c) {
@@ -122,7 +120,7 @@ void runSudokuApp() {
             }
         }
 
-        const char* labels[3] = {"Sudoku [E]", "Sudoku [M]", "Sudoku [H]"};
+        const char* labels[3] = {"Sudoku[E] En:Chk R:New", "Sudoku[M] En:Chk R:New", "Sudoku[H] En:Chk R:New"};
         int cr = 0, cc = 0;
         bool has_results = false;
         std::array<std::array<int8_t, 9>, 9> results{};
@@ -135,13 +133,13 @@ void runSudokuApp() {
             }
 
             drawSudokuGrid(puzzle.board, clues, has_results ? &results : nullptr,
-                           cr, cc, labels[diff], "Enter:Chk R:New", cfg::COL_GRAY);
+                           cr, cc, labels[diff]);
 
             KeyInput k = ui::pollInput();
             ui::applyMenuNav(k);
             char lc = k.ch ? static_cast<char>(std::tolower(static_cast<unsigned char>(k.ch))) : 0;
 
-            if (k.esc || k.btn_g0 || lc == 'q') {
+            if (k.esc || k.btn_g0) {
                 ui::waitKeyRelease();
                 return;
             }
@@ -167,7 +165,7 @@ void runSudokuApp() {
             } else if (k.enter) {
                 if (sudoku_logic::isValidCompleteBoard(puzzle.board)) {
                     drawSudokuGrid(puzzle.board, clues, nullptr, -1, -1,
-                                   "You Win!", "Any key -> menu", cfg::COL_GREEN);
+                                   "You Win! Press any key");
                     ui::waitKeyRelease();
                     while (true) {
                         KeyInput wk = ui::pollInput();
