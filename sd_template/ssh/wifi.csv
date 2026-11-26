@@ -1,0 +1,5 @@
+# Cardputer-Adv WiFi CSV (/sd/ssh/wifi.csv)
+# Minimal columns: ssid,password
+# Optional extended columns: ssid,password,hidden,bssid,dhcp,ip,mask,gw,dns
+MyOfficeWiFi,your-wifi-password
+GuestOpenNetwork,

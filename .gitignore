@@ -1,0 +1,14 @@
+.DS_Store
+__pycache__/
+*.pyc
+*.pyo
+*.log
+.venv/
+venv/
+.venv-*/
+.pio/
+dist/
+.claude/
+.env
+*.bin
+*.elf

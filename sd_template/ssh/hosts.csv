@@ -1,0 +1,10 @@
+# Cardputer-Adv SSH Hosts CSV (/sd/ssh/hosts.csv)
+# Columns: host,user,password,port,key_file,legacy,name
+# Minimal 3-column format is also accepted: host,user,password
+# - port: default 22
+# - key_file: filename inside /sd/ssh/keys/ (or LittleFS /keys/)
+# - legacy: 1 = allow ssh-rsa / group14-sha1 / group1-sha1 / aes128-cbc / hmac-sha1
+# - name: optional display alias in menu
+192.168.1.10,ubuntu,,22,id_ed25519,0,Home Linux
+192.168.1.254,admin,secret123,22,,1,Legacy Switch
+10.0.0.5,root,toor
